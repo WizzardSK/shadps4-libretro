@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: 2026 shadPS4 Emulator Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: Build libretro core
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Platforms to build, comma separated (linux, windows)"
+        default: "linux,windows"
+
+concurrency:
+  group: libretro-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  linux:
+    name: Linux x86_64
+    if: contains(inputs.platforms, 'linux')
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: Add LLVM repository
+      run: |
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt install -y libx11-dev libxext-dev libwayland-dev libdecor-0-dev libxkbcommon-dev libglfw3-dev libgles2-mesa-dev clang-19 mold build-essential libasound2-dev libpulse-dev libopenal-dev libudev-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev
+
+    - name: Cache CMake Build
+      uses: hendrikmuhs/ccache-action@v1.2.21
+      with:
+        append-timestamp: false
+        key: libretro-linux-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+
+    - name: Configure CMake
+      run: cmake --fresh -B ${{github.workspace}}/build -DENABLE_LIBRETRO=ON -DENABLE_DISCORD_RPC=OFF -DENABLE_UPDATER=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_MODULE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel $(nproc)
+
+    - name: Collect
+      run: |
+        mkdir out
+        cp "$(find build -name 'shadps4_libretro.so' | head -1)" out/
+        cp libretro/shadps4_libretro.info out/
+        ls -la out
+        nm -D --defined-only out/shadps4_libretro.so | grep -c ' retro_'
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: shadps4_libretro-linux-x86_64
+        path: out/
+
+  windows:
+    name: Windows x86_64
+    if: contains(inputs.platforms, 'windows')
+    runs-on: windows-2025-vs2026
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: Cache CMake Build
+      uses: hendrikmuhs/ccache-action@v1.2.21
+      with:
+        append-timestamp: false
+        key: libretro-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+
+    - name: Configure CMake
+      run: cmake --fresh -G Ninja -B ${{github.workspace}}/build -DENABLE_LIBRETRO=ON -DENABLE_DISCORD_RPC=OFF -DENABLE_UPDATER=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel $env:NUMBER_OF_PROCESSORS
+
+    - name: Collect
+      shell: bash
+      run: |
+        mkdir out
+        cp "$(find build -name 'shadps4_libretro.dll' | head -1)" out/
+        cp libretro/shadps4_libretro.info out/
+        ls -la out
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: shadps4_libretro-windows-x86_64
+        path: out/

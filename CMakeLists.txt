@@ -39,6 +39,7 @@ cmake_dependent_option(ENABLE_SYSTEM_VULKAN "Enable the system Vulkan driver" OF
 option(ENABLE_DISCORD_RPC "Enable the Discord RPC integration" ON)
 option(ENABLE_UPDATER "Enables the options to updater" ON)
 option(ENABLE_TESTS "Build unit tests (requires GTest)" OFF)
+option(ENABLE_LIBRETRO "Build the libretro core (shadps4_libretro) instead of the executable" OFF)
 option(ENABLE_SYSTEM_LIBRARIES "Enable building against system libraries" OFF)
 
 # First, determine whether to use CMAKE_OSX_ARCHITECTURES or CMAKE_SYSTEM_PROCESSOR.
@@ -1307,6 +1308,37 @@ endif()
 
 if(NOT ENABLE_TESTS)
 
+if (ENABLE_LIBRETRO)
+    # The libretro core: the emulator as a module the frontend loads, with
+    # libretro/libretro_core.cpp in the place of main.cpp. The target keeps
+    # the name shadps4, so everything below applies to it as to the executable.
+    add_library(shadps4 MODULE
+        ${AUDIO_CORE}
+        ${IMGUI}
+        ${INPUT}
+        ${COMMON}
+        ${CORE}
+        ${SHADER_RECOMPILER}
+        ${VIDEO_CORE}
+        ${EMULATOR}
+        ${SHADNET}
+        libretro/libretro.h
+        libretro/libretro_core.cpp
+        src/emulator.cpp
+        src/emulator.h
+        src/sdl_window.h
+        src/sdl_window.cpp
+    )
+    set_target_properties(shadps4 PROPERTIES PREFIX "" OUTPUT_NAME "shadps4_libretro")
+    add_compile_definitions(LIBRETRO)
+    if (UNIX AND NOT APPLE)
+        # Only retro_* is exported and the core's own symbols bind inside it:
+        # a frontend that carries SDL itself must not get tied to the core's.
+        target_link_options(shadps4 PRIVATE
+            -Wl,-Bsymbolic
+            -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libretro/link.T)
+    endif()
+else()
 add_executable(shadps4
     ${AUDIO_CORE}
     ${IMGUI}
@@ -1323,6 +1355,7 @@ add_executable(shadps4
     src/sdl_window.h
     src/sdl_window.cpp
 )
+endif()
 
 create_target_directory_groups(shadps4)
 
@@ -1418,6 +1451,9 @@ if (WIN32)
         target_link_libraries(shadps4 PRIVATE clang_rt.builtins-x86_64.lib)
     endif()
 
+    # The three below are properties of an executable: the libretro core is
+    # loaded into the frontend's process, at whatever its base and stack are.
+    if (NOT ENABLE_LIBRETRO)
     # Disable ASLR so we can reserve the user area
     if (MSVC)
         target_link_options(shadps4 PRIVATE /DYNAMICBASE:NO)
@@ -1438,9 +1474,10 @@ if (WIN32)
     else()
         target_link_options(shadps4 PRIVATE -Wl,--image-base=0x700000000000)
     endif()
+    endif()
 endif()
 
-if (WIN32)
+if (WIN32 AND NOT ENABLE_LIBRETRO)
     target_sources(shadps4 PRIVATE src/dist/shadps4.rc)
 endif()
 
@@ -1495,7 +1532,9 @@ if (ENABLE_DISCORD_RPC)
 endif()
 
 # Install rules
+if (NOT ENABLE_LIBRETRO)
 install(TARGETS shadps4 BUNDLE DESTINATION .)
+endif()
 
 else()
     enable_testing()

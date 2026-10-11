@@ -85,9 +85,25 @@ static std::optional<std::filesystem::path> GetBundleParentDirectory() {
 }
 #endif
 
-static auto UserPaths = [] {
+#ifdef LIBRETRO
+// The libretro core keeps everything under the frontend's system directory
+// (system/shadPS4), set before the first path is asked for.
+static std::filesystem::path libretro_user_dir;
+
+void SetLibretroUserDir(const std::filesystem::path& dir) {
+    libretro_user_dir = dir;
+}
+#endif
+
+static std::unordered_map<PathType, fs::path> MakeUserPaths() {
     // Try the portable user directory first.
     auto user_dir = std::filesystem::current_path() / PORTABLE_DIR;
+#ifdef LIBRETRO
+    if (!libretro_user_dir.empty()) {
+        std::filesystem::create_directories(libretro_user_dir);
+        user_dir = libretro_user_dir;
+    }
+#endif
     if (!std::filesystem::exists(user_dir)) {
         // If it doesn't exist, use the standard path for the platform instead.
         // NOTE: On Windows we currently just create the portable directory instead.
@@ -152,7 +168,19 @@ static auto UserPaths = [] {
     }
 
     return paths;
-}();
+}
+
+#ifdef LIBRETRO
+// Made when first asked for, not when the library is loaded: the frontend's
+// system directory is only known once the core is running.
+static std::unordered_map<PathType, fs::path>& UserPathsRef() {
+    static auto paths = MakeUserPaths();
+    return paths;
+}
+#define UserPaths UserPathsRef()
+#else
+static auto UserPaths = MakeUserPaths();
+#endif
 
 bool ValidatePath(const fs::path& path) {
     if (path.empty()) {
