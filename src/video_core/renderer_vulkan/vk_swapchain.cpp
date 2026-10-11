@@ -18,10 +18,23 @@ static constexpr vk::SurfaceFormatKHR SURFACE_FORMAT_HDR = {
     .colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT,
 };
 
+#ifdef LIBRETRO
+// The libretro core has no surface to present to: the "swapchain" is a few images of its own,
+// taken in turn, and the presenter reads each finished one back for the frontend. B8G8R8A8 is
+// the frontend's XRGB8888 byte for byte.
+static constexpr u32 OFFSCREEN_IMAGE_COUNT = 3;
+
+Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window_)
+    : instance{instance_}, window{window_} {
+    surface_format.format = vk::Format::eB8G8R8A8Unorm;
+    surface_format.colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
+    present_mode = vk::PresentModeKHR::eFifo;
+#else
 Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window_)
     : instance{instance_}, window{window_}, surface{CreateSurface(instance.GetInstance(), window)} {
     FindPresentFormat();
     FindPresentMode();
+#endif
 
     Create(window.GetWidth(), window.GetHeight());
     ImGui::Core::Initialize(instance, window, image_count, surface_format.format);
@@ -29,7 +42,9 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
 
 Swapchain::~Swapchain() {
     Destroy();
+#ifndef LIBRETRO
     instance.GetInstance().destroySurfaceKHR(surface);
+#endif
 }
 
 void Swapchain::Create(u32 width_, u32 height_) {
@@ -38,6 +53,17 @@ void Swapchain::Create(u32 width_, u32 height_) {
     needs_recreation = false;
 
     Destroy();
+
+#ifdef LIBRETRO
+    extent = vk::Extent2D{std::max(width, 1u), std::max(height, 1u)};
+    image_count = OFFSCREEN_IMAGE_COUNT;
+    image_index = 0;
+    frame_index = 0;
+    CreateOffscreenImages();
+    SetupImages();
+    RefreshSemaphores();
+    return;
+#endif
 
     SetSurfaceProperties();
 
@@ -103,6 +129,10 @@ void Swapchain::SetHDR(bool hdr) {
 }
 
 bool Swapchain::AcquireNextImage() {
+#ifdef LIBRETRO
+    image_index = (image_index + 1) % image_count;
+    return true;
+#endif
     vk::Device device = instance.GetDevice();
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
@@ -128,6 +158,10 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present() {
+#ifdef LIBRETRO
+    frame_index = (frame_index + 1) % image_count;
+    return true;
+#endif
     const vk::PresentInfoKHR present_info = {
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
@@ -269,6 +303,16 @@ void Swapchain::Destroy() {
     if (swapchain) {
         device.destroySwapchainKHR(swapchain);
     }
+#ifdef LIBRETRO
+    for (const auto& image : images) {
+        device.destroyImage(image);
+    }
+    images.clear();
+    for (const auto& memory : offscreen_memory) {
+        device.freeMemory(memory);
+    }
+    offscreen_memory.clear();
+#endif
 
     for (const auto& sem : image_acquired) {
         device.destroySemaphore(sem);
@@ -306,13 +350,72 @@ void Swapchain::RefreshSemaphores() {
     }
 }
 
+#ifdef LIBRETRO
+void Swapchain::CreateOffscreenImages() {
+    const vk::Device device = instance.GetDevice();
+    const auto memory_properties = instance.GetPhysicalDevice().getMemoryProperties();
+
+    images.resize(image_count);
+    offscreen_memory.resize(image_count);
+    for (u32 i = 0; i < image_count; ++i) {
+        const vk::ImageCreateInfo image_info = {
+            .imageType = vk::ImageType::e2D,
+            .format = surface_format.format,
+            .extent = {extent.width, extent.height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = vk::ImageUsageFlagBits::eColorAttachment |
+                     vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
+            .sharingMode = vk::SharingMode::eExclusive,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        };
+        auto [image_result, image] = device.createImage(image_info);
+        ASSERT_MSG(image_result == vk::Result::eSuccess, "Failed to create offscreen image: {}",
+                   vk::to_string(image_result));
+        images[i] = image;
+
+        const auto requirements = device.getImageMemoryRequirements(image);
+        u32 memory_type = std::numeric_limits<u32>::max();
+        for (u32 type = 0; type < memory_properties.memoryTypeCount; ++type) {
+            const bool allowed = (requirements.memoryTypeBits & (1u << type)) != 0;
+            const bool device_local =
+                static_cast<bool>(memory_properties.memoryTypes[type].propertyFlags &
+                                  vk::MemoryPropertyFlagBits::eDeviceLocal);
+            if (allowed && device_local) {
+                memory_type = type;
+                break;
+            }
+        }
+        ASSERT_MSG(memory_type != std::numeric_limits<u32>::max(),
+                   "No device memory type for the offscreen image");
+
+        const vk::MemoryAllocateInfo allocate_info = {
+            .allocationSize = requirements.size,
+            .memoryTypeIndex = memory_type,
+        };
+        auto [memory_result, memory] = device.allocateMemory(allocate_info);
+        ASSERT_MSG(memory_result == vk::Result::eSuccess,
+                   "Failed to allocate offscreen image memory: {}", vk::to_string(memory_result));
+        offscreen_memory[i] = memory;
+
+        const auto bind_result = device.bindImageMemory(image, memory, 0);
+        ASSERT_MSG(bind_result == vk::Result::eSuccess,
+                   "Failed to bind offscreen image memory: {}", vk::to_string(bind_result));
+    }
+}
+#endif
+
 void Swapchain::SetupImages() {
     vk::Device device = instance.GetDevice();
+#ifndef LIBRETRO
     auto [images_result, imgs] = device.getSwapchainImagesKHR(swapchain);
     ASSERT_MSG(images_result == vk::Result::eSuccess, "Failed to create swapchain images: {}",
                vk::to_string(images_result));
     images = std::move(imgs);
     image_count = static_cast<u32>(images.size());
+#endif
     images_view.resize(image_count);
     for (u32 i = 0; i < image_count; ++i) {
         if (images_view[i]) {

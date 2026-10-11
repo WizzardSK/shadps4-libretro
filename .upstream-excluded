@@ -1,0 +1,15 @@
+.github/FUNDING.yml
+.github/ISSUE_TEMPLATE
+.github/shadps4.png
+.github/workflows/build.yml
+.github/workflows/scripts
+CMakePresets.json
+CMakeSettings.json
+CONTRIBUTING.md
+documents
+flake.lock
+flake.nix
+scripts
+src/dist
+src/main.cpp
+tests

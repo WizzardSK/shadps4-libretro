@@ -111,6 +111,11 @@ private:
     /// Creates the image acquired and present ready semaphores
     void RefreshSemaphores();
 
+#ifdef LIBRETRO
+    /// Creates the images that stand in for a swapchain's
+    void CreateOffscreenImages();
+#endif
+
 private:
     const Instance& instance;
     const Frontend::WindowSDL& window;
@@ -123,6 +128,9 @@ private:
     vk::SurfaceTransformFlagBitsKHR transform;
     vk::CompositeAlphaFlagBitsKHR composite_alpha;
     std::vector<vk::Image> images;
+#ifdef LIBRETRO
+    std::vector<vk::DeviceMemory> offscreen_memory;
+#endif
     std::vector<vk::ImageView> images_view;
     std::vector<vk::Semaphore> image_acquired;
     std::vector<vk::Semaphore> present_ready;

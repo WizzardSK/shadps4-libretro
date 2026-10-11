@@ -14,6 +14,9 @@
 #include "core/libraries/audio/audioout.h"
 #include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/kernel/threads.h"
+#ifdef LIBRETRO
+#include "libretro/libretro_bridge.h"
+#endif
 
 // SIMD support detection
 #if defined(__x86_64__) || defined(_M_X64)
@@ -174,6 +177,9 @@ private:
     }
 
     void Cleanup() {
+#ifdef LIBRETRO
+        Libretro::RemoveAudioStream(stream);
+#endif
         if (stream) {
             SDL_DestroyAudioStream(stream);
             stream = nullptr;
@@ -255,6 +261,42 @@ private:
         }
     }
 
+#ifdef LIBRETRO
+    // The libretro core: the port's stream is bound to no device. SDL converts what the game
+    // writes to the frontend's format (16-bit stereo at 48 kHz) and the core takes it out a
+    // frame's worth per retro_run, mixing the ports.
+    bool OpenDevice(OrbisAudioOutPort type) {
+        ps4_downmix = num_channels >= 6;
+        if (ps4_downmix) {
+            internal_buffer_size = buffer_frames * sizeof(float) * 2;
+        }
+        const SDL_AudioSpec source = {
+            .format = SDL_AUDIO_F32LE,
+            .channels = ps4_downmix ? 2 : static_cast<int>(num_channels),
+            .freq = static_cast<int>(sample_rate),
+        };
+        const SDL_AudioSpec target = {
+            .format = SDL_AUDIO_S16LE,
+            .channels = 2,
+            .freq = Libretro::AUDIO_SAMPLE_RATE,
+        };
+        stream = SDL_CreateAudioStream(&source, &target);
+        if (!stream) {
+            LOG_ERROR(Lib_AudioOut, "Failed to create SDL audio stream: {}", SDL_GetError());
+            return false;
+        }
+        if (!ps4_downmix && !ConfigureChannelMap()) {
+            SDL_DestroyAudioStream(stream);
+            stream = nullptr;
+            return false;
+        }
+        SDL_SetAudioStreamGain(stream, current_gain.load(std::memory_order_relaxed));
+        Libretro::AddAudioStream(stream);
+        LOG_INFO(Lib_AudioOut, "Opened audio port type {} for the frontend ({} Hz, {} ch)",
+                 static_cast<int>(type), sample_rate, num_channels);
+        return true;
+    }
+#else
     bool OpenDevice(OrbisAudioOutPort type) {
         // Determine device
         const std::string device_name = GetDeviceName(type);
@@ -324,6 +366,8 @@ private:
                  sample_rate, num_channels, initial_gain);
         return true;
     }
+
+#endif
 
     SDL_AudioDeviceID SelectAudioDevice(const std::string& device_name, OrbisAudioOutPort type) {
         if (device_name == "None") {
@@ -484,6 +528,12 @@ private:
         if (!stream) {
             return;
         }
+#ifdef LIBRETRO
+        // No device to ask: a tenth of a second of what the game writes. The frontend takes a
+        // whole frame's worth at a time, so the queue swings by that much on its own.
+        queue_threshold = (sample_rate / 10) * sizeof(float) * (ps4_downmix ? 2 : num_channels);
+        return;
+#endif
 
         SDL_AudioSpec discard;
         int sdl_buffer_frames = 0;

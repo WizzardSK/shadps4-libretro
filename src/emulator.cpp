@@ -45,6 +45,9 @@
 #include "core/memory.h"
 #include "core/user_settings.h"
 #include "emulator.h"
+#ifdef LIBRETRO
+#include "libretro/libretro_bridge.h"
+#endif
 #include "video_core/cache_storage.h"
 #include "video_core/renderdoc.h"
 
@@ -434,6 +437,10 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     }
 
     EmulatorSettings.Load(id);
+#ifdef LIBRETRO
+    // The frontend's core options, on top of what the config files say.
+    Libretro::ApplyCoreOptions();
+#endif
     // Switch to configured log
     Common::Log::Switch((!id.empty() && EmulatorSettings.IsLogSeparate()) ? id + ".log"
                                                                           : "shad_log.txt",

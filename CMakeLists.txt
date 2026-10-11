@@ -39,7 +39,15 @@ cmake_dependent_option(ENABLE_SYSTEM_VULKAN "Enable the system Vulkan driver" OF
 option(ENABLE_DISCORD_RPC "Enable the Discord RPC integration" ON)
 option(ENABLE_UPDATER "Enables the options to updater" ON)
 option(ENABLE_TESTS "Build unit tests (requires GTest)" OFF)
-option(ENABLE_LIBRETRO "Build the libretro core (shadps4_libretro) instead of the executable" OFF)
+option(ENABLE_LIBRETRO "Build the libretro core (shadps4_libretro)" ON)
+if (NOT ENABLE_LIBRETRO)
+    # The standalone's entry point, packaging files, tests and documents are not in this
+    # repository (.upstream-excluded).
+    message(FATAL_ERROR "This repository builds the libretro core only; the standalone emulator is upstream's, github.com/shadps4-emu/shadPS4")
+endif()
+if (ENABLE_TESTS)
+    message(FATAL_ERROR "Upstream's tests are not in this repository (.upstream-excluded)")
+endif()
 option(ENABLE_SYSTEM_LIBRARIES "Enable building against system libraries" OFF)
 
 # First, determine whether to use CMAKE_OSX_ARCHITECTURES or CMAKE_SYSTEM_PROCESSOR.
@@ -1309,9 +1317,11 @@ endif()
 if(NOT ENABLE_TESTS)
 
 if (ENABLE_LIBRETRO)
-    # The libretro core: the emulator as a module the frontend loads, with
-    # libretro/libretro_core.cpp in the place of main.cpp. The target keeps
-    # the name shadps4, so everything below applies to it as to the executable.
+    # The libretro core: a module the frontend loads, which starts itself again in a
+    # process of its own to run the emulator (libretro/libretro_core.cpp in the
+    # frontend's process, libretro/host.cpp in the emulator's, in the place of
+    # main.cpp). The target keeps the name shadps4, so everything below applies to it
+    # as to the executable.
     add_library(shadps4 MODULE
         ${AUDIO_CORE}
         ${IMGUI}
@@ -1322,8 +1332,13 @@ if (ENABLE_LIBRETRO)
         ${VIDEO_CORE}
         ${EMULATOR}
         ${SHADNET}
+        libretro/host.cpp
         libretro/libretro.h
+        libretro/libretro_bridge.h
         libretro/libretro_core.cpp
+        libretro/libretro_core_options.h
+        libretro/libretro_core_options_intl.h
+        libretro/shared_state.h
         src/emulator.cpp
         src/emulator.h
         src/sdl_window.h
@@ -1337,6 +1352,21 @@ if (ENABLE_LIBRETRO)
         target_link_options(shadps4 PRIVATE
             -Wl,-Bsymbolic
             -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libretro/link.T)
+
+        # The launcher of the emulator's process, built first and carried in the core
+        # as an array (libretro/host_main.c, libretro/embed_host.cmake).
+        add_executable(shadps4_libretro_host libretro/host_main.c)
+        target_link_libraries(shadps4_libretro_host PRIVATE ${CMAKE_DL_LIBS})
+        set(LIBRETRO_HOST_BLOB "${CMAKE_CURRENT_BINARY_DIR}/libretro_host_blob.c")
+        add_custom_command(
+            OUTPUT "${LIBRETRO_HOST_BLOB}"
+            COMMAND ${CMAKE_COMMAND}
+                    -DINPUT=$<TARGET_FILE:shadps4_libretro_host>
+                    -DOUTPUT=${LIBRETRO_HOST_BLOB}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/libretro/embed_host.cmake
+            DEPENDS shadps4_libretro_host ${CMAKE_CURRENT_SOURCE_DIR}/libretro/embed_host.cmake
+            VERBATIM)
+        target_sources(shadps4 PRIVATE "${LIBRETRO_HOST_BLOB}")
     endif()
 else()
 add_executable(shadps4

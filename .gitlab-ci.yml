@@ -1,0 +1,85 @@
+# DESCRIPTION: GitLab CI/CD for libRetro (NOT FOR GitLab-proper)
+
+# Linux x64.
+#
+# shadPS4 needs clang 19 and a C++23 standard library; the buildbot's Linux image
+# (Ubuntu 18.04) cannot build it, so the job runs in Ubuntu 24.04 with clang 19 from
+# apt.llvm.org, as the project's own GitHub CI does, and GCC 14's libstdc++, which that
+# CI's runners have and the sources count on (a bare image has GCC 13's, where a header
+# the sources use without including it is not pulled in). The core then needs glibc 2.39.
+#
+# Not here: Windows - the project builds there with clang-cl against a current MSVC,
+# newer than the buildbot's 2019 16.8, and a MinGW build has not been tried. Linux
+# aarch64, macOS and Android - the emulator runs the game's x86-64 code directly on the
+# host CPU and has no other backend.
+
+##############################################################################
+################################# BOILERPLATE ################################
+##############################################################################
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_DEPTH: "0"
+
+.core-defs:
+  variables:
+    CORENAME: shadps4
+
+include:
+  # Linux
+  - project: 'libretro-infrastructure/ci-templates'
+    file: '/linux-cmake.yml'
+
+stages:
+  - build-prepare
+  - build-shared
+
+# A runner having a bad minute should not redden the pipeline; anything really
+# broken still fails three times over.
+default:
+  retry: 2
+
+##############################################################################
+#################################### STAGES ##################################
+##############################################################################
+
+# Defining before_script replaces the template's instead of adding to it, so
+# its NUMPROC is set again here.
+.core-defs-linux:
+  extends: .core-defs
+  image: ubuntu:24.04
+  timeout: 3h
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  before_script:
+    - export NUMPROC=$(($(nproc)/5))
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+      ca-certificates wget gnupg git cmake ninja-build pkg-config build-essential binutils
+    - wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key > /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+    - echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" > /etc/apt/sources.list.d/llvm-19.list
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+      clang-19 clang-tools-19 mold libstdc++-14-dev
+      libx11-dev libxext-dev libwayland-dev libdecor-0-dev libxkbcommon-dev
+      libglfw3-dev libgles2-mesa-dev libasound2-dev libpulse-dev libopenal-dev
+      libudev-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev
+      libxrandr-dev libxfixes-dev libxrender-dev libxinerama-dev libegl1-mesa-dev
+      libgl1-mesa-dev libdrm-dev libgbm-dev wayland-protocols libdbus-1-dev uuid-dev
+      python3 nasm zlib1g-dev
+  script:
+    - cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      -DENABLE_DISCORD_RPC=OFF -DENABLE_UPDATER=OFF
+      -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19
+      -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold
+      -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold
+      -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=mold
+    - cmake --build build -- -j $NUMPROC
+    - mv "$(find build -name "$LIBNAME" | head -1)" "$LIBNAME"
+    - strip --strip-unneeded "$LIBNAME"
+
+# Linux 64-bit
+libretro-build-linux-x64:
+  extends:
+    - .libretro-linux-cmake-x86_64
+    - .core-defs-linux

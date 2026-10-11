@@ -45,6 +45,9 @@
 #include <imgui.h>
 #include <stb_image_write.h>
 #include <vk_mem_alloc.h>
+#ifdef LIBRETRO
+#include "libretro/libretro_bridge.h"
+#endif
 
 namespace Vulkan {
 
@@ -991,7 +994,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
         ImGui::Core::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
 
-        if (capture_with_overlays_count > 0) {
+#ifdef LIBRETRO
+        // Every frame is read back for the frontend, by the way a screenshot with overlays is.
+        const bool read_back_frame = true;
+#else
+        const bool read_back_frame = capture_with_overlays_count > 0;
+#endif
+        if (read_back_frame) {
             auto& readback = pending_screenshot.emplace(
                 instance, ScreenshotKind::WithOverlays,
                 BuildScreenshotPaths(ScreenshotKind::WithOverlays, capture_with_overlays_count),
@@ -1062,14 +1071,27 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     // Flush vulkan commands.
     if (pending_screenshot) {
         scheduler.DeferPriorityOperation([deferred_screenshot = std::move(pending_screenshot)]() {
+#ifdef LIBRETRO
+            const auto& readback = deferred_screenshot.value();
+            const u64 size = static_cast<u64>(readback.width) * readback.height * 4;
+            if (readback.buffer.mapped_data.size() >= size) {
+                Libretro::PushFrame(readback.buffer.mapped_data.data(), readback.width,
+                                    readback.height);
+            }
+#endif
             SavePendingScreenshot(deferred_screenshot.value());
         });
     }
 
     SubmitInfo info{};
+#ifndef LIBRETRO
     info.AddWait(swapchain.GetImageAcquiredSemaphore());
+#endif
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
+#ifndef LIBRETRO
+    // The libretro core's images are its own: nothing acquires them and nothing presents them.
     info.AddSignal(swapchain.GetPresentReadySemaphore());
+#endif
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
