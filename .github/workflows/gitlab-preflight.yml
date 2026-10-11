@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 shadPS4 Emulator Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+# Replays the libretro buildbot's Linux job (.gitlab-ci.yml) in the same image, since the
+# buildbot's pipelines cannot be started from here. Keep the two in step: the commands
+# below are the job's before_script and script, word for word.
+
+name: GitLab CI preflight
+
+on:
+  workflow_dispatch:
+
+jobs:
+  linux-x64:
+    name: libretro-build-linux-x64
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Replay the job in ubuntu:24.04
+      run: |
+        docker run --rm -v "$PWD":/src -w /src \
+          -e DEBIAN_FRONTEND=noninteractive -e CORENAME=shadps4 -e LIBNAME=shadps4_libretro.so \
+          ubuntu:24.04 bash -euxc '
+            export NUMPROC=$(($(nproc)/5)); [ "$NUMPROC" -ge 1 ] || NUMPROC=$(nproc)
+            git config --global --add safe.directory "*" || true
+            apt-get update -qq
+            apt-get install -y --no-install-recommends \
+              ca-certificates wget gnupg git cmake ninja-build pkg-config build-essential binutils
+            git config --global --add safe.directory "*"
+            wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key > /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+            echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" > /etc/apt/sources.list.d/llvm-19.list
+            apt-get update -qq
+            apt-get install -y --no-install-recommends \
+              clang-19 mold \
+              libx11-dev libxext-dev libwayland-dev libdecor-0-dev libxkbcommon-dev \
+              libglfw3-dev libgles2-mesa-dev libasound2-dev libpulse-dev libopenal-dev \
+              libudev-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DENABLE_DISCORD_RPC=OFF -DENABLE_UPDATER=OFF \
+              -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 \
+              -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold \
+              -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold \
+              -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=mold
+            cmake --build build -- -j $NUMPROC
+            mv "$(find build -name "$LIBNAME" | head -1)" "$LIBNAME"
+            strip --strip-unneeded "$LIBNAME"
+            ls -la "$LIBNAME"
+            nm -D --defined-only "$LIBNAME" | grep " retro_"
+          '
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: shadps4_libretro-buildbot-linux-x64
+        path: shadps4_libretro.so
