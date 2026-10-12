@@ -20,6 +20,10 @@ inline constexpr std::size_t FRAME_BYTES = static_cast<std::size_t>(MAX_WIDTH) *
 
 /// Frames of 16-bit stereo the audio ring holds. A power of two.
 inline constexpr std::uint32_t AUDIO_RING_FRAMES = 16384;
+/// Frames the emulator keeps in the ring: two of the frontend's frames' worth at 60 per
+/// second, about 33 ms. The frontend takes one at a time, so less would run dry; more would
+/// only be latency.
+inline constexpr std::uint32_t AUDIO_RING_TARGET_FRAMES = 1600;
 
 inline constexpr std::size_t PATH_BYTES = 4096;
 

@@ -87,7 +87,11 @@ public:
         UpdateVolumeIfChanged();
         const u64 current_time = Kernel::sceKernelGetProcessTime();
         convert(ptr, internal_buffer, buffer_frames, nullptr);
+#ifdef LIBRETRO
+        WaitForFrontend();
+#else
         HandleTiming(current_time);
+#endif
 
         if ((output_count++ & 0xF) == 0) { // Check every 16 outputs
             ManageAudioQueue();
@@ -249,6 +253,25 @@ private:
             next_output_time += period_us;
         }
     }
+
+#ifdef LIBRETRO
+    // The libretro core: the port is paced by what the frontend takes, as a device would pace
+    // it, not by the clock. The frontend takes a frame's worth per run at its own rate, a
+    // little off the game's; against the clock the difference piled up as latency until the
+    // queue was thrown away. The port waits while more than about 32 ms of its sound is still
+    // queued (the ring the core reads from holds as much again). Not for ever: a frontend
+    // that has stopped taking sound must not stop the game's audio thread with it.
+    void WaitForFrontend() {
+        const int limit = static_cast<int>((sample_rate * 32 / 1000) * sizeof(float) *
+                                           (ps4_downmix ? 2 : num_channels));
+        for (int waited_ms = 0; waited_ms < 250; ++waited_ms) {
+            if (SDL_GetAudioStreamQueued(stream) <= limit) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+#endif
 
     void ManageAudioQueue() {
         const auto queued = SDL_GetAudioStreamQueued(stream);
@@ -529,9 +552,10 @@ private:
             return;
         }
 #ifdef LIBRETRO
-        // No device to ask: a tenth of a second of what the game writes. The frontend takes a
-        // whole frame's worth at a time, so the queue swings by that much on its own.
-        queue_threshold = (sample_rate / 10) * sizeof(float) * (ps4_downmix ? 2 : num_channels);
+        // No device to ask: a quarter of a second of what the game writes. The port waits for
+        // the frontend well before that (WaitForFrontend), so this is only reached when the
+        // frontend has stopped taking sound.
+        queue_threshold = (sample_rate / 4) * sizeof(float) * (ps4_downmix ? 2 : num_channels);
         return;
 #endif
 

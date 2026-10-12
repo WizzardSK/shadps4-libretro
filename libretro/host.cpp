@@ -100,11 +100,15 @@ void PumpAudio() {
     static std::int32_t sum[chunk_frames * 2];
 
     for (;;) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
 
         const std::uint32_t written = shared->audio_written.load(std::memory_order_relaxed);
         const std::uint32_t read = shared->audio_read.load(std::memory_order_acquire);
-        const std::uint32_t free_frames = Libretro::AUDIO_RING_FRAMES - (written - read);
+        // Up to the target and no further: what the ports have beyond it stays in their
+        // streams, where the game's audio threads wait for it to be taken.
+        const std::uint32_t queued = written - read;
+        const std::uint32_t free_frames =
+            queued < Libretro::AUDIO_RING_TARGET_FRAMES ? Libretro::AUDIO_RING_TARGET_FRAMES - queued : 0;
         const std::uint32_t wanted = std::min(chunk_frames, free_frames);
         if (wanted == 0) {
             continue;
