@@ -223,12 +223,18 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
 WindowSDL::~WindowSDL() = default;
 
 void WindowSDL::SetIcon(std::span<const u8> png_data) {
+#ifdef LIBRETRO
+    // The window of the core is hidden and never shown, so it has no use for an icon, and the
+    // video driver it is on under Linux cannot take one.
+    (void)png_data;
+#else
     if (png_data.empty()) {
         LOG_WARNING(Core, "No window icon data available, using default icon.");
         SetDefaultWindowIcon(window);
         return;
     }
     SetWindowIcon(window, std::vector<u8>(png_data.begin(), png_data.end()));
+#endif
 }
 
 void WindowSDL::WaitEvent() {

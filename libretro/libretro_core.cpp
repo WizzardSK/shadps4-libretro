@@ -296,13 +296,16 @@ bool StartEmulator(const std::string& argument) {
     return true;
 }
 
-// Whether the emulator's process has ended, and with what.
-bool EmulatorEnded(int& code) {
+// Whether the emulator's process has ended, with what, and whether it was killed rather than
+// ended by itself. An unhandled exception leaves the status of the exception behind, which has
+// one of the two top severity bits set; a status a program exits with is a small number.
+bool EmulatorEnded(int& code, bool& crashed) {
     if (!emulator_process || WaitForSingleObject(emulator_process, 0) != WAIT_OBJECT_0) {
         return false;
     }
     DWORD exit_code = 0;
     GetExitCodeProcess(emulator_process, &exit_code);
+    crashed = (exit_code >> 30) >= 2;
     code = static_cast<int>(exit_code);
     return true;
 }
@@ -418,7 +421,10 @@ bool StartEmulator(const std::string& argument) {
     return true;
 }
 
-bool EmulatorEnded(int& code) {
+// Whether the emulator's process has ended, with what, and whether it was killed rather than
+// ended by itself: a process that ends by itself leaves the status it exited with, one that is
+// killed leaves the signal that killed it.
+bool EmulatorEnded(int& code, bool& crashed) {
     if (emulator_pid <= 0) {
         return false;
     }
@@ -426,7 +432,8 @@ bool EmulatorEnded(int& code) {
     if (waitpid(emulator_pid, &status, WNOHANG) != emulator_pid) {
         return false;
     }
-    code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    crashed = !WIFEXITED(status);
+    code = crashed ? WTERMSIG(status) : WEXITSTATUS(status);
     emulator_pid = -1;
     return true;
 }
@@ -743,13 +750,19 @@ RETRO_API void retro_run(void) {
         // The emulator ended on its own: the game quit, or it crashed. Either way there is
         // nothing left to show, and the frontend is asked to close the content.
         int code = 0;
-        if (emulator_running && EmulatorEnded(code)) {
+        bool crashed = false;
+        if (emulator_running && EmulatorEnded(code, crashed)) {
             emulator_running = false;
-            if (code != 0) {
-                char text[160];
+            char text[160];
+            if (crashed) {
                 std::snprintf(text, sizeof(text),
                               "shadPS4: the emulator stopped unexpectedly (%d); see shadps4.log",
                               code);
+                Notify(text);
+            } else if (code != 0) {
+                // The game ended itself, with an error of its own: not the emulator's crash.
+                std::snprintf(text, sizeof(text),
+                              "shadPS4: the game ended with an error (%d); see shadps4.log", code);
                 Notify(text);
             } else {
                 Log(RETRO_LOG_INFO, "The emulator ended");
