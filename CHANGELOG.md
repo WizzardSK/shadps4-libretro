@@ -2,6 +2,10 @@
 
 What changed in the libretro core of this fork, newest first. Changes that come with a merge of upstream shadPS4 are in upstream's own history; a merge is noted here with the upstream commit it brought in.
 
+## Unreleased
+
+- Linux: the emulator's hidden window is on SDL's offscreen video driver, and SDL is built without the X11 and Wayland backends, so the core needs no display server of its own and builds without their headers. Not yet run by anyone.
+
 ## Test build 1 - 2026-10-11
 
 The first build of the core. Based on upstream shadPS4 3a9f572. It has been built for Windows and Linux x86_64 and not yet run on real hardware by anyone: games may not start at all.

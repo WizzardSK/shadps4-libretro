@@ -101,6 +101,11 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
     if (!SDL_SetHint(SDL_HINT_APP_NAME, "shadPS4")) {
         UNREACHABLE_MSG("Failed to set SDL window hint: {}", SDL_GetError());
     }
+#if defined(LIBRETRO) && defined(SDL_PLATFORM_LINUX)
+    // The hidden window of the core is on a video driver without a display server: SDL is
+    // built without the X11 and Wayland ones there (externals/CMakeLists.txt).
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen,dummy");
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         UNREACHABLE_MSG("Failed to initialize SDL video subsystem: {}", SDL_GetError());
     }
@@ -122,8 +127,14 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height);
 #ifdef LIBRETRO
     // The frontend shows the picture. The window stays, hidden, for what still hangs on it:
-    // the size of the picture, ImGui's platform layer and the event loop.
+    // the size of the picture, ImGui's platform layer and the event loop. It is not a Vulkan
+    // window: no surface is made for it (vk_swapchain.cpp), and a video driver without a
+    // display server could not make it one.
+#if defined(SDL_PLATFORM_LINUX)
+    SDL_SetNumberProperty(props, "flags", SDL_WINDOW_HIDDEN);
+#else
     SDL_SetNumberProperty(props, "flags", SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN);
+#endif
 #else
     SDL_SetNumberProperty(props, "flags", SDL_WINDOW_VULKAN);
 #endif
