@@ -4,6 +4,7 @@ What changed in the libretro core of this fork, newest first. Changes that come 
 
 ## Unreleased
 
+- The recipe for libretro's buildbot builds the Windows core too: its MSVC is too old for shadPS4, so the job cross-builds on Linux with clang-cl against the MSVC runtime and Windows SDK (`.ci/build-windows-cross.sh`). A GitHub workflow replays the job.
 - Sound: a game's audio ports are paced by what the frontend takes, and about 65 ms is queued at most. They were paced by the clock, so a frontend running slightly slower than the game's sound let up to a third of a second pile up as latency, with part of it thrown away now and then. Not yet run by anyone.
 - Linux: the emulator's hidden window is on SDL's offscreen video driver, and SDL is built without the X11 and Wayland backends, so the core needs no display server of its own and builds without their headers. Not yet run by anyone.
 

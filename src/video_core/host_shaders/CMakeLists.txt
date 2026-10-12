@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: Copyright 2023 Citra Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-if (TARGET glslang-standalone)
+# A cross build cannot run the glslang it builds for the target: it is given one
+# built for the build machine (.ci/build-windows-cross.sh).
+set(SHADPS4_HOST_GLSLANG "" CACHE FILEPATH "glslang for the build machine, for a cross build")
+if (SHADPS4_HOST_GLSLANG)
+    set(GLSLANG_COMPILER "${SHADPS4_HOST_GLSLANG}")
+elseif (TARGET glslang-standalone)
     set(GLSLANG_COMPILER glslang-standalone)
 elseif (TARGET glslang::glslang-standalone)
     set(GLSLANG_COMPILER glslang::glslang-standalone)

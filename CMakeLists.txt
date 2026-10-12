@@ -1288,13 +1288,21 @@ set(EMULATOR src/emulator.cpp
 )
 
 # shadNet protobuf generation
+# A cross build cannot run the protoc it builds for the target: it is given one
+# built for the build machine (.ci/build-windows-cross.sh).
+set(SHADPS4_HOST_PROTOC "" CACHE FILEPATH "protoc for the build machine, for a cross build")
+if (SHADPS4_HOST_PROTOC)
+    set(SHADNET_PROTOC "${SHADPS4_HOST_PROTOC}")
+else()
+    set(SHADNET_PROTOC protobuf::protoc)
+endif()
 set(SHADNET_PROTO_OUT "${CMAKE_CURRENT_BINARY_DIR}/shadnet_proto_gen")
 file(MAKE_DIRECTORY "${SHADNET_PROTO_OUT}")
 add_custom_command(
     OUTPUT
         "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
         "${SHADNET_PROTO_OUT}/shadnet.pb.h"
-    COMMAND protobuf::protoc
+    COMMAND ${SHADNET_PROTOC}
         "--proto_path=${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet"
         "--cpp_out=${SHADNET_PROTO_OUT}"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/shadnet/shadnet.proto"

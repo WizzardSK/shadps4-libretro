@@ -8,9 +8,8 @@
 # CI's runners have and the sources count on (a bare image has GCC 13's, where a header
 # the sources use without including it is not pulled in). The core then needs glibc 2.39.
 #
-# Not here: Windows - the project builds there with clang-cl against a current MSVC,
-# newer than the buildbot's 2019 16.8, and a MinGW build has not been tried. Linux
-# aarch64, macOS and Android - the emulator runs the game's x86-64 code directly on the
+# Windows x64: cross-built on Linux, see the job. Not here: Linux aarch64, macOS and
+# Android - the emulator runs the game's x86-64 code directly on the
 # host CPU and has no other backend.
 
 ##############################################################################
@@ -29,6 +28,10 @@ include:
   # Linux
   - project: 'libretro-infrastructure/ci-templates'
     file: '/linux-cmake.yml'
+
+  # Windows
+  - project: 'libretro-infrastructure/ci-templates'
+    file: '/windows-cmake-mingw.yml'
 
 stages:
   - build-prepare
@@ -82,3 +85,25 @@ libretro-build-linux-x64:
   extends:
     - .libretro-linux-cmake-x86_64
     - .core-defs-linux
+
+# Windows 64-bit
+#
+# The project builds on Windows with clang-cl against a current MSVC, newer than
+# the buildbot's 2019 16.8, so the job cross-builds on Linux: clang-cl and
+# lld-link against the MSVC CRT and Windows SDK that xwin fetches
+# (.ci/build-windows-cross.sh), linking the same runtime as the project's own
+# Windows build. The template's MXE image and steps are not used, only its name
+# and artifacts.
+libretro-build-windows-x64:
+  extends:
+    - .libretro-windows-cmake-x86_64
+    - .core-defs
+  image: ubuntu:24.04
+  timeout: 3h
+  before_script:
+    - export NUMPROC=$(($(nproc)/5))
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends git ca-certificates
+  script:
+    - BUILD_DIR=$BUILD_DIR NUMPROC=$NUMPROC .ci/build-windows-cross.sh
+    - mv "$BUILD_DIR/$LIBNAME" "$LIBNAME"
