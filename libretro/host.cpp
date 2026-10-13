@@ -261,12 +261,19 @@ void PushFrame(const void* pixels, std::uint32_t width, std::uint32_t height) {
         height > MAX_HEIGHT) {
         return;
     }
-    const std::uint32_t count = shared->frame_count.load(std::memory_order_relaxed);
-    const std::uint32_t slot = (count + 1) & 1;
+    // Into the slot that is neither the newest nor the one the core is showing
+    // (shared_state.h, frame_held).
+    const std::uint32_t latest = shared->frame_latest.load();
+    const std::uint32_t newest = latest == 0 ? FRAME_SLOT_NONE : latest & 3;
+    const std::uint32_t held = shared->frame_held.load();
+    std::uint32_t slot = 0;
+    while (slot == newest || slot == held) {
+        ++slot;
+    }
     shared->frame_size[slot].width = width;
     shared->frame_size[slot].height = height;
     std::memcpy(SharedFrame(shared, slot), pixels, static_cast<std::size_t>(width) * height * 4);
-    shared->frame_count.store(count + 1, std::memory_order_release);
+    shared->frame_latest.store((((latest >> 2) + 1) << 2) | slot);
     frame_seen = true;
 }
 

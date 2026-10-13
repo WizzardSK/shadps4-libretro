@@ -38,6 +38,9 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#ifdef LIBRETRO
+#include <mutex>
+#endif
 #include <span>
 #include <sstream>
 #include <system_error>
@@ -154,6 +157,60 @@ struct ScreenshotReadback {
                  VideoCore::MemoryType::HostCached},
           width{width_}, height{height_}, format{format_}, hdr_encoded{hdr_encoded_} {}
 };
+
+#ifdef LIBRETRO
+// The libretro core reads every frame back, and a buffer made for each one cost more than the
+// copy it was made for: at 3840x2160 the device ran out of memory. The buffers are kept and
+// used again. The list is never destroyed: it would outlive the device it belongs to.
+static std::mutex frame_readbacks_mutex;
+static std::vector<std::shared_ptr<ScreenshotReadback>>& FrameReadbacks() {
+    static auto* const readbacks = new std::vector<std::shared_ptr<ScreenshotReadback>>;
+    return *readbacks;
+}
+
+static std::shared_ptr<ScreenshotReadback> TakeFrameReadback(const Instance& instance,
+                                                             const u32 width, const u32 height,
+                                                             const vk::Format format,
+                                                             const bool hdr_encoded) {
+    {
+        std::scoped_lock lock{frame_readbacks_mutex};
+        auto& readbacks = FrameReadbacks();
+        for (auto it = readbacks.begin(); it != readbacks.end(); ++it) {
+            if ((*it)->width == width && (*it)->height == height) {
+                auto readback = std::move(*it);
+                readbacks.erase(it);
+                readback->format = format;
+                readback->hdr_encoded = hdr_encoded;
+                return readback;
+            }
+        }
+    }
+    return std::make_shared<ScreenshotReadback>(instance, ScreenshotKind::WithOverlays,
+                                                std::vector<std::filesystem::path>{}, width,
+                                                height, format, hdr_encoded);
+}
+
+// Called where a frame's buffer used to be destroyed, once its frame has been handed over.
+// Buffers of another size are from before the picture changed size, and go.
+static void ReturnFrameReadback(std::shared_ptr<ScreenshotReadback> readback) {
+    static constexpr std::size_t MaxKept = 4;
+    std::vector<std::shared_ptr<ScreenshotReadback>> dropped;
+    {
+        std::scoped_lock lock{frame_readbacks_mutex};
+        auto& readbacks = FrameReadbacks();
+        std::erase_if(readbacks, [&](auto& kept) {
+            if (kept->width == readback->width && kept->height == readback->height) {
+                return false;
+            }
+            dropped.push_back(std::move(kept));
+            return true;
+        });
+        if (readbacks.size() < MaxKept) {
+            readbacks.push_back(std::move(readback));
+        }
+    }
+}
+#endif
 
 static std::string SanitizeFilenameComponent(std::string value) {
     for (char& c : value) {
@@ -885,6 +942,11 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     const auto cmdbuf = scheduler.CommandBuffer();
     const u32 capture_with_overlays_count = VideoCore::ConsumeWithOverlaysScreenshotRequests();
     std::optional<ScreenshotReadback> pending_screenshot;
+#ifdef LIBRETRO
+    // The frame for the frontend. Screenshots are not taken in the core.
+    std::shared_ptr<ScreenshotReadback> frame_readback;
+    (void)capture_with_overlays_count;
+#endif
 
     if (EmulatorSettings.IsVkHostMarkersEnabled()) {
         cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
@@ -995,12 +1057,21 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         ImGui::Core::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
 
 #ifdef LIBRETRO
-        // Every frame is read back for the frontend, by the way a screenshot with overlays is.
+        // Every frame is read back for the frontend, by the way a screenshot with overlays is,
+        // into a buffer that is used again.
         const bool read_back_frame = true;
 #else
         const bool read_back_frame = capture_with_overlays_count > 0;
 #endif
         if (read_back_frame) {
+#ifdef LIBRETRO
+            frame_readback = TakeFrameReadback(
+                instance, extent.width, extent.height,
+                swapchain.GetHDR() ? vk::Format::eA2B10G10R10UnormPack32
+                                   : swapchain.GetSurfaceFormat().format,
+                swapchain.GetHDR());
+            auto& readback = *frame_readback;
+#else
             auto& readback = pending_screenshot.emplace(
                 instance, ScreenshotKind::WithOverlays,
                 BuildScreenshotPaths(ScreenshotKind::WithOverlays, capture_with_overlays_count),
@@ -1008,6 +1079,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 swapchain.GetHDR() ? vk::Format::eA2B10G10R10UnormPack32
                                    : swapchain.GetSurfaceFormat().format,
                 swapchain.GetHDR());
+#endif
 
             const vk::ImageMemoryBarrier to_transfer{
                 .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
@@ -1069,16 +1141,20 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
 
     // Flush vulkan commands.
+#ifdef LIBRETRO
+    if (frame_readback) {
+        scheduler.DeferPriorityOperation([readback = std::move(frame_readback)]() {
+            const u64 size = static_cast<u64>(readback->width) * readback->height * 4;
+            if (readback->buffer.mapped_data.size() >= size) {
+                Libretro::PushFrame(readback->buffer.mapped_data.data(), readback->width,
+                                    readback->height);
+            }
+            ReturnFrameReadback(readback);
+        });
+    }
+#endif
     if (pending_screenshot) {
         scheduler.DeferPriorityOperation([deferred_screenshot = std::move(pending_screenshot)]() {
-#ifdef LIBRETRO
-            const auto& readback = deferred_screenshot.value();
-            const u64 size = static_cast<u64>(readback.width) * readback.height * 4;
-            if (readback.buffer.mapped_data.size() >= size) {
-                Libretro::PushFrame(readback.buffer.mapped_data.data(), readback.width,
-                                    readback.height);
-            }
-#endif
             SavePendingScreenshot(deferred_screenshot.value());
         });
     }

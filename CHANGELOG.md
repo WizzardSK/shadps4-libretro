@@ -4,6 +4,8 @@ What changed in the libretro core of this fork, newest first. Changes that come 
 
 ## Unreleased
 
+- The picture costs less on its way to the frontend. The emulator made a buffer for every frame it read back from the GPU and now uses them again, and the core hands RetroArch the frame from the shared memory in place of a copy of it. Not yet run by anyone.
+- Output Resolution 3840x2160 should no longer end the emulator with "Failed allocating buffer with error ErrorOutOfDeviceMemory", which came from those per-frame buffers on a machine with little video memory. Not yet run by anyone.
 - A new core option, Copy GPU Buffers, on by default: the emulator copies a game's command buffers when they are submitted. Sonic Mania stopped with "Out of order flip IRQ" on entering Mania Mode because it built its next frame over a command buffer the emulator had not drawn yet, which the core's late presentation makes a regular thing; with the emulator's own setting for this turned on in its config file the game ran on through that point on Linux, twice. The option itself is not yet run by anyone.
 - The frontend is told the names of the controls: RetroArch's Controls menu showed nothing for the core's ports, and now lists the PS4 buttons and sticks of as many ports as the Controllers option says. Not yet run by anyone.
 - A race in the emulator's wait for an idle GPU thread is closed: an idle signal that arrived late could release the game to submit its next frame while a command buffer was still waiting. It was meant to end Sonic Mania stopping with "Out of order flip IRQ" when Mania Mode is entered, and does not: the game still stops there with this build, on Linux. Standalone 0.19.0 does not stop there.

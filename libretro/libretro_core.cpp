@@ -16,7 +16,7 @@
 //             loads the core and calls retro_host_main with the shared memory's descriptor
 //
 // Picture: the emulator's renderer reads each finished frame back and puts it in the shared
-// memory; retro_run copies the newest one and hands it over as a software frame.
+// memory; retro_run hands the newest one over as a software frame, from where it is.
 // Sound: the emulator mixes its audio ports into a ring; retro_run takes one frame's worth and
 // fills what is missing with silence.
 // Pads: the buttons, sticks and triggers of as many ports as the Controllers option says go
@@ -93,10 +93,13 @@ int shared_fd = -1;
 pid_t emulator_pid = -1;
 #endif
 
-std::vector<uint32_t> shown_frame;
+// The frame handed to the frontend: a slot of the shared memory, held for as long as it is
+// shown (shared_state.h, frame_held), or blank_frame until the emulator has drawn one.
+const void* shown_frame = nullptr;
+std::vector<uint32_t> blank_frame;
 unsigned shown_width = 0;
 unsigned shown_height = 0;
-uint32_t shown_count = 0;
+uint32_t shown_latest = 0;
 
 // The Output Resolution the game was loaded with: the size frames come at, and so the largest
 // the frontend is told to expect. No larger - a frontend sizes its shader passes by it.
@@ -551,26 +554,28 @@ void ApplyRumble() {
 // while it was made; else the newer one is tried.
 void TakeFrame() {
     for (int attempt = 0; attempt < 3; ++attempt) {
-        const uint32_t count = shared->frame_count.load(std::memory_order_acquire);
-        if (count == 0 || count == shown_count) {
+        const uint32_t latest = shared->frame_latest.load();
+        if (latest == 0 || latest == shown_latest) {
             return;
         }
-        const uint32_t slot = count & 1;
+        // Held first, then looked at again: once the slot is held and still the newest, the
+        // emulator does not write into it, and it is shown from where it is.
+        const uint32_t slot = latest & 3;
+        if (slot >= Libretro::FRAME_SLOTS) {
+            return;
+        }
+        shared->frame_held.store(slot);
+        if (shared->frame_latest.load() != latest) {
+            continue;
+        }
         const uint32_t width = shared->frame_size[slot].width;
         const uint32_t height = shared->frame_size[slot].height;
         if (width == 0 || height == 0 || width > Libretro::MAX_WIDTH ||
             height > Libretro::MAX_HEIGHT) {
             return;
         }
-        static std::vector<uint32_t> copy;
-        copy.resize(static_cast<std::size_t>(width) * height);
-        std::memcpy(copy.data(), Libretro::SharedFrame(shared, slot),
-                    copy.size() * sizeof(uint32_t));
-        if (shared->frame_count.load(std::memory_order_acquire) != count) {
-            continue;
-        }
-        shown_frame.swap(copy);
-        shown_count = count;
+        shown_frame = Libretro::SharedFrame(shared, slot);
+        shown_latest = latest;
         if (width != shown_width || height != shown_height) {
             shown_width = width;
             shown_height = height;
@@ -757,10 +762,11 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
         axes[Libretro::SHARED_AXIS_TRIGGER_RIGHT] = 0;
     }
 
-    shown_frame.clear();
+    shared->frame_held.store(Libretro::FRAME_SLOT_NONE);
+    shown_frame = nullptr;
     shown_width = 0;
     shown_height = 0;
-    shown_count = 0;
+    shown_latest = 0;
     shutdown_requested = false;
 
     Log(RETRO_LOG_INFO, "shadPS4 %s (%s), user directory %s", Common::g_version,
@@ -783,6 +789,8 @@ RETRO_API void retro_unload_game(void) {
         shared->quit.store(1, std::memory_order_release);
     }
     StopEmulator();
+    // The frame shown was in the shared memory.
+    shown_frame = nullptr;
     DestroyShared();
     emulator_running = false;
 }
@@ -830,13 +838,14 @@ RETRO_API void retro_run(void) {
     }
 
     if (video_cb) {
-        if (shown_frame.empty()) {
+        if (!shown_frame) {
             // Nothing drawn yet: black, at the size declared.
-            shown_frame.assign(static_cast<std::size_t>(output_width) * output_height, 0);
+            blank_frame.assign(static_cast<std::size_t>(output_width) * output_height, 0);
+            shown_frame = blank_frame.data();
             shown_width = output_width;
             shown_height = output_height;
         }
-        video_cb(shown_frame.data(), shown_width, shown_height, shown_width * sizeof(uint32_t));
+        video_cb(shown_frame, shown_width, shown_height, shown_width * sizeof(uint32_t));
     }
     if (audio_batch_cb) {
         audio_batch_cb(sound, kAudioFrames);

@@ -8,15 +8,22 @@
 #include <cstdint>
 
 // The memory the libretro core (libretro_core.cpp, in the frontend's process) shares with the
-// emulator it runs in a process of its own (host.cpp). One block: this header, then two frames.
+// emulator it runs in a process of its own (host.cpp). One block: this header, then three
+// frames.
 namespace Libretro {
 
 inline constexpr std::uint32_t SHARED_MAGIC = 0x34505368; // "hSP4"
-inline constexpr std::uint32_t SHARED_VERSION = 4;
+inline constexpr std::uint32_t SHARED_VERSION = 5;
 
 inline constexpr std::uint32_t MAX_WIDTH = 3840;
 inline constexpr std::uint32_t MAX_HEIGHT = 2160;
 inline constexpr std::size_t FRAME_BYTES = static_cast<std::size_t>(MAX_WIDTH) * MAX_HEIGHT * 4;
+
+/// The slots a frame can be in: the newest one published, the one the core is showing, and one
+/// for the emulator to write the next into.
+inline constexpr std::uint32_t FRAME_SLOTS = 3;
+/// frame_held when the core is showing none.
+inline constexpr std::uint32_t FRAME_SLOT_NONE = FRAME_SLOTS;
 
 /// Frames of 16-bit stereo the audio ring holds. A power of two.
 inline constexpr std::uint32_t AUDIO_RING_FRAMES = 16384;
@@ -95,13 +102,20 @@ struct SharedState {
     /// A pad's motors, the small one in the low byte and the large one above it.
     std::atomic<std::uint32_t> rumble[MAX_PADS];
 
-    /// Frames published so far. Frame n is in slot n & 1 and stays whole until frame n + 2 is
-    /// begun: the core copies it and takes the copy only if nothing was published meanwhile.
-    std::atomic<std::uint32_t> frame_count;
+    /// The newest frame: frames published so far, times four, plus the slot the newest is in.
+    /// Zero while there is none. Written by the emulator only.
+    std::atomic<std::uint32_t> frame_latest;
+    /// The slot the core is showing, which it hands to the frontend without a copy, or
+    /// FRAME_SLOT_NONE. Written by the core only. The emulator writes a frame into a slot that
+    /// is neither this one nor the newest. The core sets this to the newest slot and then reads
+    /// frame_latest again: if it still names that slot, the emulator either saw the slot held or
+    /// had not published anything newer, so it is not writing there. Both sides use the default,
+    /// sequentially consistent ordering for the two; the argument needs it.
+    std::atomic<std::uint32_t> frame_held;
     struct {
         std::uint32_t width;
         std::uint32_t height;
-    } frame_size[2];
+    } frame_size[FRAME_SLOTS];
 
     /// A ring of interleaved 16-bit stereo, one writer (the emulator) and one reader (the core).
     /// The indices count frames and only grow; a position is index & (AUDIO_RING_FRAMES - 1).
@@ -111,7 +125,7 @@ struct SharedState {
 };
 
 inline constexpr std::size_t SHARED_FRAMES_OFFSET = (sizeof(SharedState) + 4095) & ~std::size_t{4095};
-inline constexpr std::size_t SHARED_BYTES = SHARED_FRAMES_OFFSET + 2 * FRAME_BYTES;
+inline constexpr std::size_t SHARED_BYTES = SHARED_FRAMES_OFFSET + FRAME_SLOTS * FRAME_BYTES;
 
 inline std::uint8_t* SharedFrame(SharedState* state, std::uint32_t slot) {
     return reinterpret_cast<std::uint8_t*>(state) + SHARED_FRAMES_OFFSET + slot * FRAME_BYTES;
