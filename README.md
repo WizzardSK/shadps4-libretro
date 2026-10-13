@@ -2,7 +2,7 @@
 
 A [libretro](https://www.libretro.com/) core of [shadPS4](https://shadps4.net), the PlayStation 4 emulator, for RetroArch and other libretro frontends.
 
-The emulator is upstream's: this repository follows [shadps4-emu/shadPS4](https://github.com/shadps4-emu/shadPS4) and adds the libretro core in `libretro/`. It holds the core only; upstream's standalone entry point, packaging, tests, documents and CI are not part of it (the paths are listed in `.upstream-excluded`). The version the core reports is upstream's. What changed in the core is in [CHANGELOG.md](CHANGELOG.md).
+The emulator is upstream's: this repository follows [shadps4-emu/shadPS4](https://github.com/shadps4-emu/shadPS4) and adds the libretro core in `libretro/`. It holds the core only; upstream's standalone entry point, packaging, tests, documents and CI are not part of it (the paths are listed in `.upstream-excluded`). The version the core reports is upstream's; the core is currently on upstream shadPS4 0.19.1 WIP, commit [3a9f572](https://github.com/shadps4-emu/shadPS4/commit/3a9f57265d28975658f1ca941daa5c879c7a74bd) of 11 October 2026. What changed in the core is in [CHANGELOG.md](CHANGELOG.md).
 
 The core is experimental: it is at the stage of first tests, and games may not start at all.
 
