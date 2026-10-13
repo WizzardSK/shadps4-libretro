@@ -778,6 +778,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
 #ifndef _WIN32
     if (shared->options.gpu_frames != 0 && Libretro::GpuFrames::Request(environ_cb, log_cb)) {
         gpu_frames = true;
+        Libretro::GpuFrames::SetShared(shared);
         int pair[2];
         if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair) == 0) {
             gpu_socket = pair[0];
@@ -838,6 +839,7 @@ RETRO_API void retro_unload_game(void) {
     // The frame shown was in the shared memory, or one of the emulator's images.
     shown_frame = nullptr;
     Libretro::GpuFrames::Close();
+    Libretro::GpuFrames::SetShared(nullptr);
 #ifndef _WIN32
     if (gpu_socket >= 0) {
         close(gpu_socket);

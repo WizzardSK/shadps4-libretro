@@ -13,7 +13,7 @@
 namespace Libretro {
 
 inline constexpr std::uint32_t SHARED_MAGIC = 0x34505368; // "hSP4"
-inline constexpr std::uint32_t SHARED_VERSION = 6;
+inline constexpr std::uint32_t SHARED_VERSION = 7;
 
 inline constexpr std::uint32_t MAX_WIDTH = 3840;
 inline constexpr std::uint32_t MAX_HEIGHT = 2160;
@@ -147,6 +147,13 @@ struct SharedState {
         std::uint32_t width;
         std::uint32_t height;
     } frame_size[FRAME_IMAGES];
+
+    /// With gpu_frames: the GPU the frontend's Vulkan device is on, for the emulator to make
+    /// its own on, as an image's memory cannot be handed from one GPU to another.
+    /// frontend_gpu is 0 until the core knows, then 1 with the device's UUID in
+    /// frontend_gpu_uuid, or 2 when it could not find out.
+    std::atomic<std::uint32_t> frontend_gpu;
+    std::uint8_t frontend_gpu_uuid[16];
 
     /// A ring of interleaved 16-bit stereo, one writer (the emulator) and one reader (the core).
     /// The indices count frames and only grow; a position is index & (AUDIO_RING_FRAMES - 1).

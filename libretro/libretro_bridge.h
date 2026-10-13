@@ -29,6 +29,11 @@ void ApplyCoreOptions();
 /// core option says so and the frontend gave the core a Vulkan context.
 bool GpuFramesWanted();
 
+/// The GPU the frontend's Vulkan device is on, by its device UUID, for the emulator to make
+/// its own on. Waits a few seconds for the core to learn it. False when the picture is not
+/// handed over on the GPU or the frontend's GPU is not known: the emulator then picks as usual.
+bool FrontendGpu(std::uint8_t* device_uuid);
+
 /// How many images the emulator draws its frames into then.
 std::uint32_t GpuFrameImages();
 

@@ -42,6 +42,7 @@ namespace {
 
 retro_environment_t environment_cb = nullptr;
 retro_log_printf_t log_cb = nullptr;
+SharedState* shared_state = nullptr;
 
 // The frontend's Vulkan, between context_reset and context_destroy.
 const retro_hw_render_interface_vulkan* vulkan = nullptr;
@@ -133,8 +134,8 @@ void DestroyImported() {
     imported = false;
 }
 
-// The GPU and the driver the emulator's images are on have to be the frontend's.
-bool SameGpu() {
+// The frontend's GPU and driver, by their UUIDs. False where they cannot be asked for.
+bool FrontendIds(VkPhysicalDeviceIDProperties& ids) {
     auto properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
         vulkan->get_instance_proc_addr(vulkan->instance, "vkGetPhysicalDeviceProperties2"));
     if (!properties2) {
@@ -142,17 +143,41 @@ bool SameGpu() {
             vulkan->get_instance_proc_addr(vulkan->instance, "vkGetPhysicalDeviceProperties2KHR"));
     }
     if (!properties2) {
-        // Nothing to compare with; the import itself will tell.
-        return true;
+        return false;
     }
-    VkPhysicalDeviceIDProperties ids{};
+    ids = {};
     ids.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
     VkPhysicalDeviceProperties2 properties{};
     properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     properties.pNext = &ids;
     properties2(vulkan->gpu, &properties);
+    return true;
+}
+
+// The GPU and the driver the emulator's images are on have to be the frontend's.
+bool SameGpu() {
+    VkPhysicalDeviceIDProperties ids{};
+    if (!FrontendIds(ids)) {
+        // Nothing to compare with; the import itself will tell.
+        return true;
+    }
     return std::memcmp(ids.deviceUUID, message.device_uuid, VK_UUID_SIZE) == 0 &&
            std::memcmp(ids.driverUUID, message.driver_uuid, VK_UUID_SIZE) == 0;
+}
+
+// The emulator waits to be told which GPU the frontend is on before it picks its own
+// (host.cpp, FrontendGpu), so that both are on the same one where there are several.
+void TellFrontendGpu() {
+    if (!shared_state || shared_state->frontend_gpu.load() != 0) {
+        return;
+    }
+    VkPhysicalDeviceIDProperties ids{};
+    if (vulkan && FrontendIds(ids)) {
+        std::memcpy(shared_state->frontend_gpu_uuid, ids.deviceUUID, VK_UUID_SIZE);
+        shared_state->frontend_gpu.store(1);
+    } else {
+        shared_state->frontend_gpu.store(2);
+    }
 }
 
 void Import() {
@@ -257,6 +282,7 @@ void ContextReset() {
     if (!environment_cb(RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE, &interface) || !interface ||
         interface->interface_type != RETRO_HW_RENDER_INTERFACE_VULKAN) {
         Fail("the frontend gave no Vulkan interface");
+        TellFrontendGpu();
         return;
     }
     vulkan = interface;
@@ -279,8 +305,10 @@ void ContextReset() {
         !device_calls.CreateImageView || !device_calls.DestroyImageView) {
         vulkan = nullptr;
         Fail("the frontend's Vulkan device lacks a function");
+        TellFrontendGpu();
         return;
     }
+    TellFrontendGpu();
     Import();
 }
 
@@ -507,6 +535,10 @@ bool Request(retro_environment_t environment, retro_log_printf_t log) {
     return true;
 }
 
+void SetShared(SharedState* shared) {
+    shared_state = shared;
+}
+
 void Receive(int socket) {
     if (socket < 0 || have_message) {
         return;
@@ -595,6 +627,7 @@ namespace Libretro::GpuFrames {
 bool Request(retro_environment_t, retro_log_printf_t) {
     return false;
 }
+void SetShared(SharedState*) {}
 void Receive(int) {}
 void Show(retro_video_refresh_t, std::uint32_t, bool, unsigned, unsigned) {}
 const char* Failure() {

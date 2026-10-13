@@ -293,6 +293,23 @@ bool GpuFramesWanted() {
 #endif
 }
 
+bool FrontendGpu(std::uint8_t* device_uuid) {
+    if (!GpuFramesWanted()) {
+        return false;
+    }
+    // The frontend makes its device right after the game is loaded, and the emulator gets here
+    // about as soon: five seconds is far more than the frontend takes.
+    for (int attempt = 0; attempt < 500 && shared->frontend_gpu.load() == 0; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (shared->frontend_gpu.load() != 1) {
+        LOG_WARNING(Render_Vulkan, "The frontend's GPU is not known");
+        return false;
+    }
+    std::memcpy(device_uuid, shared->frontend_gpu_uuid, sizeof(shared->frontend_gpu_uuid));
+    return true;
+}
+
 std::uint32_t GpuFrameImages() {
     return FRAME_IMAGES;
 }

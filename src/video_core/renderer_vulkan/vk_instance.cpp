@@ -13,6 +13,11 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+#ifdef LIBRETRO
+#include <array>
+#include <cstring>
+#include "libretro/libretro_bridge.h"
+#endif
 
 #include <vk_mem_alloc.h>
 
@@ -105,6 +110,28 @@ Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
     ASSERT_MSG(num_physical_devices > 0, "No physical devices found");
     LOG_INFO(Render_Vulkan, "Found {} physical devices", num_physical_devices);
 
+#ifdef LIBRETRO
+    // With the picture handed to the frontend on the GPU, the frontend's GPU: an image's
+    // memory cannot be handed from one GPU to another (libretro/gpu_frames.cpp).
+    bool on_frontend_gpu = false;
+    std::array<u8, VK_UUID_SIZE> frontend_gpu{};
+    if (Libretro::FrontendGpu(frontend_gpu.data())) {
+        for (const auto& physical : physical_devices) {
+            const auto ids = physical
+                                 .getProperties2<vk::PhysicalDeviceProperties2,
+                                                 vk::PhysicalDeviceIDProperties>()
+                                 .get<vk::PhysicalDeviceIDProperties>();
+            if (std::memcmp(ids.deviceUUID.data(), frontend_gpu.data(), VK_UUID_SIZE) == 0) {
+                physical_device = physical;
+                on_frontend_gpu = true;
+                break;
+            }
+        }
+    }
+    if (on_frontend_gpu) {
+        LOG_INFO(Render_Vulkan, "Using the frontend's GPU");
+    } else
+#endif
     if (physical_device_index < 0) {
         std::vector<
             std::tuple<size_t, vk::PhysicalDeviceProperties2, vk::PhysicalDeviceMemoryProperties>>

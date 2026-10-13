@@ -398,7 +398,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         "shadps4_gpu_frames",
         "GPU Frame Hand-over",
         NULL,
-        "Shows the finished frames straight from the GPU in place of copying each one through system memory, which costs less at high output resolutions. Linux only, with the frontend's Vulkan video driver, and both on the same GPU. Where that does not hold the picture stays black and a message says so.",
+        "Shows the finished frames straight from the GPU in place of copying each one through system memory, which costs less at high output resolutions. Linux only, with the frontend's Vulkan video driver. Where it cannot be done the picture stays black and a message says so.",
         NULL,
         "video",
         {
