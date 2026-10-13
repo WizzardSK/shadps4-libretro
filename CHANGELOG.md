@@ -4,6 +4,7 @@ What changed in the libretro core of this fork, newest first. Changes that come 
 
 ## Unreleased
 
+- Linux: a crash of the emulator is reported at once. The system wrote a core dump of the emulator's process first, which is the console's whole address space: it took over a minute, could use up the machine's memory, and until it was done the frontend showed a still picture with no message. The process no longer leaves a core dump. Tried on Linux by setting the same limit on a running core from outside, not yet with a build.
 - The hidden window is no longer given an icon. Nobody sees it, and on Linux its video driver cannot take one, so every start logged an error about it. Tried on Linux.
 - A game that ends itself closes the content without a crash report: its `exit()` ended the emulator's process through the assertion handler, so the frontend showed the message meant for a crash and the system wrote a crash report for a game that had quit on its own. The process now ends the way it does when content is closed, and the message about a crash is kept for a process that was really killed; a game that ends with an error status of its own is reported as that. Tried on Linux with a homebrew sample that ends itself, not yet with a game.
 - The recipe for libretro's buildbot builds the Windows core too: its MSVC is too old for shadPS4, so the job cross-builds on Linux with clang-cl against the MSVC runtime and Windows SDK (`.ci/build-windows-cross.sh`). A GitHub workflow replays the job.

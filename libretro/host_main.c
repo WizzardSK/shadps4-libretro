@@ -17,6 +17,7 @@
 #include <unistd.h>
 #ifdef __linux__
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #endif
 
 int main(int argc, char** argv) {
@@ -31,6 +32,17 @@ int main(int argc, char** argv) {
     prctl(PR_SET_PDEATHSIG, SIGKILL);
     if (getppid() != parent) {
         return 1;
+    }
+
+    // No core dump of this process. Its address space is the console's, with gigabytes of
+    // shared memory behind it: a dump takes minutes and can run the machine out of memory,
+    // and until it is done the process has not ended, so the core cannot tell the frontend
+    // of the crash and the picture just stands still. A limit of 1 is the one that also
+    // stops a dump piped to a crash handler; 0 does not.
+    struct rlimit core_limit;
+    if (getrlimit(RLIMIT_CORE, &core_limit) == 0) {
+        core_limit.rlim_cur = core_limit.rlim_max < 1 ? core_limit.rlim_max : 1;
+        setrlimit(RLIMIT_CORE, &core_limit);
     }
 #endif
 
