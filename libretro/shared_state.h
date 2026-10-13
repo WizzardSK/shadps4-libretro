@@ -13,7 +13,7 @@
 namespace Libretro {
 
 inline constexpr std::uint32_t SHARED_MAGIC = 0x34505368; // "hSP4"
-inline constexpr std::uint32_t SHARED_VERSION = 5;
+inline constexpr std::uint32_t SHARED_VERSION = 6;
 
 inline constexpr std::uint32_t MAX_WIDTH = 3840;
 inline constexpr std::uint32_t MAX_HEIGHT = 2160;
@@ -22,8 +22,32 @@ inline constexpr std::size_t FRAME_BYTES = static_cast<std::size_t>(MAX_WIDTH) *
 /// The slots a frame can be in: the newest one published, the one the core is showing, and one
 /// for the emulator to write the next into.
 inline constexpr std::uint32_t FRAME_SLOTS = 3;
+/// The emulator's images when the picture is handed over on the GPU (gpu_frames.h): the same
+/// three, and two more for frames that are drawn but not finished by the GPU yet.
+inline constexpr std::uint32_t FRAME_IMAGES = 5;
 /// frame_held when the core is showing none.
-inline constexpr std::uint32_t FRAME_SLOT_NONE = FRAME_SLOTS;
+inline constexpr std::uint32_t FRAME_SLOT_NONE = 7;
+/// frame_latest is the number of frames published shifted by this, plus the newest one's slot.
+inline constexpr std::uint32_t FRAME_SLOT_BITS = 3;
+inline constexpr std::uint32_t FRAME_SLOT_MASK = (1u << FRAME_SLOT_BITS) - 1;
+
+/// What the emulator sends over the socket once its images exist, with one descriptor of an
+/// image's memory for each of them: what the core needs to make the same images in the
+/// frontend's Vulkan device. The formats and flags are Vulkan's values.
+inline constexpr std::uint32_t GPU_IMAGES_MAGIC = 0x47505368; // "hSPG"
+struct GpuImagesMessage {
+    std::uint32_t magic;
+    std::uint32_t count;
+    std::uint32_t width;
+    std::uint32_t height;
+    std::uint32_t format;
+    std::uint32_t usage;
+    std::uint32_t memory_type;
+    std::uint32_t reserved;
+    std::uint64_t allocation_size[FRAME_IMAGES];
+    std::uint8_t device_uuid[16];
+    std::uint8_t driver_uuid[16];
+};
 
 /// Frames of 16-bit stereo the audio ring holds. A power of two.
 inline constexpr std::uint32_t AUDIO_RING_FRAMES = 16384;
@@ -73,6 +97,11 @@ struct SharedOptions {
     std::uint32_t readback_linear_images;
     std::uint32_t shader_cache;
     std::uint32_t copy_gpu_buffers;
+    /// The picture is handed over on the GPU: the frontend gave the core a Vulkan context.
+    std::uint32_t gpu_frames;
+    /// The emulator's end of the socket its images' descriptors go over, as a descriptor in
+    /// the emulator's process; meaningful with gpu_frames only.
+    std::int32_t gpu_socket;
     std::uint32_t trophy_popup;
     /// 0 left, 1 right, 2 top, 3 bottom.
     std::uint32_t trophy_side;
@@ -102,8 +131,10 @@ struct SharedState {
     /// A pad's motors, the small one in the low byte and the large one above it.
     std::atomic<std::uint32_t> rumble[MAX_PADS];
 
-    /// The newest frame: frames published so far, times four, plus the slot the newest is in.
-    /// Zero while there is none. Written by the emulator only.
+    /// The newest frame: frames published so far, shifted by FRAME_SLOT_BITS, plus the slot the
+    /// newest is in. Zero while there is none. Written by the emulator only. A slot is one of
+    /// the FRAME_SLOTS frames in this memory, or with gpu_frames one of the emulator's
+    /// FRAME_IMAGES images.
     std::atomic<std::uint32_t> frame_latest;
     /// The slot the core is showing, which it hands to the frontend without a copy, or
     /// FRAME_SLOT_NONE. Written by the core only. The emulator writes a frame into a slot that
@@ -115,7 +146,7 @@ struct SharedState {
     struct {
         std::uint32_t width;
         std::uint32_t height;
-    } frame_size[FRAME_SLOTS];
+    } frame_size[FRAME_IMAGES];
 
     /// A ring of interleaved 16-bit stereo, one writer (the emulator) and one reader (the core).
     /// The indices count frames and only grow; a position is index & (AUDIO_RING_FRAMES - 1).

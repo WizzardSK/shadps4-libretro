@@ -228,7 +228,12 @@ bool Instance::CreateDevice() {
         return false;
     }
 
+#ifdef LIBRETRO
+    // Room for the one the libretro core adds below.
+    boost::container::static_vector<const char*, 40> enabled_extensions;
+#else
     boost::container::static_vector<const char*, 32> enabled_extensions;
+#endif
     const auto add_extension = [&](std::string_view extension) -> bool {
         const auto result =
             std::find_if(available_extensions.begin(), available_extensions.end(),
@@ -348,6 +353,10 @@ bool Instance::CreateDevice() {
     }
     image_view_min_lod = add_extension(VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME);
     supports_memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+#if defined(LIBRETRO) && defined(__linux__)
+    // The picture handed to the frontend on the GPU (libretro/gpu_frames.h).
+    external_memory_fd = add_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+#endif
     shader_clock = add_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
     if (shader_clock) {
         shader_clock_features = feature_chain.get<vk::PhysicalDeviceShaderClockFeaturesKHR>();

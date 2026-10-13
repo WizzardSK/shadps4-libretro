@@ -23,6 +23,8 @@ The emulator renders with Vulkan and needs a GPU with Vulkan 1.3. RetroArch's vi
 
 The frames are copied through system memory on their way to RetroArch, which costs speed at high output resolutions.
 
+On Linux the core option GPU Frame Hand-over does away with that: RetroArch draws the emulator's finished image itself, and nothing is copied. It needs RetroArch's `vulkan` video driver, and RetroArch and the emulator on the same GPU. It is off by default, because where it cannot be done there is no picture at all - a message then says why, and the option has to be turned off again.
+
 ## Content
 
 A dumped PS4 game as a folder; load its `eboot.bin`.
@@ -59,7 +61,7 @@ RetroArch's ports 1 to 4 are the console's controllers, as many as the core opti
 ## Core options
 
 - **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, Controllers, Show Splash Screen
-- **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, Shader Cache, Show FPS Counter
+- **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, GPU Frame Hand-over, Shader Cache, Show FPS Counter
 - **Audio:** Volume
 - **Trophies:** Trophy Notifications, Trophy Notification Position, Trophy Notification Duration
 - **Logging:** Logging, Separate Log Files, Log Sync

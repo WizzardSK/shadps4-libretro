@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -46,6 +47,8 @@
 #include <windows.h>
 #else
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -57,6 +60,11 @@ std::vector<SDL_AudioStream*> audio_streams;
 
 // The renderer has drawn: the emulator is up, its controllers made.
 std::atomic<bool> frame_seen{false};
+
+// The picture handed over on the GPU: whether the images were sent to the core, and which of
+// them have a frame being drawn that is not published yet.
+std::atomic<bool> gpu_frames_active{false};
+std::atomic<bool> image_in_flight[Libretro::FRAME_IMAGES];
 
 Libretro::SharedState* OpenShared(const char* argument) {
 #ifdef _WIN32
@@ -264,7 +272,7 @@ void PushFrame(const void* pixels, std::uint32_t width, std::uint32_t height) {
     // Into the slot that is neither the newest nor the one the core is showing
     // (shared_state.h, frame_held).
     const std::uint32_t latest = shared->frame_latest.load();
-    const std::uint32_t newest = latest == 0 ? FRAME_SLOT_NONE : latest & 3;
+    const std::uint32_t newest = latest == 0 ? FRAME_SLOT_NONE : latest & FRAME_SLOT_MASK;
     const std::uint32_t held = shared->frame_held.load();
     std::uint32_t slot = 0;
     while (slot == newest || slot == held) {
@@ -273,7 +281,111 @@ void PushFrame(const void* pixels, std::uint32_t width, std::uint32_t height) {
     shared->frame_size[slot].width = width;
     shared->frame_size[slot].height = height;
     std::memcpy(SharedFrame(shared, slot), pixels, static_cast<std::size_t>(width) * height * 4);
-    shared->frame_latest.store((((latest >> 2) + 1) << 2) | slot);
+    shared->frame_latest.store((((latest >> FRAME_SLOT_BITS) + 1) << FRAME_SLOT_BITS) | slot);
+    frame_seen = true;
+}
+
+bool GpuFramesWanted() {
+#if defined(__linux__)
+    return shared && shared->options.gpu_frames != 0 && shared->options.gpu_socket >= 0;
+#else
+    return false;
+#endif
+}
+
+std::uint32_t GpuFrameImages() {
+    return FRAME_IMAGES;
+}
+
+bool ShareImages(const int* memory_descriptors, std::uint32_t count, std::uint32_t width,
+                 std::uint32_t height, std::uint32_t format, std::uint32_t usage,
+                 std::uint32_t memory_type, const std::uint64_t* allocation_sizes,
+                 const std::uint8_t* device_uuid, const std::uint8_t* driver_uuid) {
+#if defined(__linux__)
+    if (!GpuFramesWanted() || count == 0 || count > FRAME_IMAGES || gpu_frames_active) {
+        return false;
+    }
+    GpuImagesMessage message{};
+    message.magic = GPU_IMAGES_MAGIC;
+    message.count = count;
+    message.width = width;
+    message.height = height;
+    message.format = format;
+    message.usage = usage;
+    message.memory_type = memory_type;
+    std::memcpy(message.allocation_size, allocation_sizes, count * sizeof(std::uint64_t));
+    std::memcpy(message.device_uuid, device_uuid, sizeof(message.device_uuid));
+    std::memcpy(message.driver_uuid, driver_uuid, sizeof(message.driver_uuid));
+
+    iovec data{&message, sizeof(message)};
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * FRAME_IMAGES)]{};
+    msghdr header{};
+    header.msg_iov = &data;
+    header.msg_iovlen = 1;
+    header.msg_control = control;
+    header.msg_controllen = CMSG_SPACE(sizeof(int) * count);
+    cmsghdr* part = CMSG_FIRSTHDR(&header);
+    part->cmsg_level = SOL_SOCKET;
+    part->cmsg_type = SCM_RIGHTS;
+    part->cmsg_len = CMSG_LEN(sizeof(int) * count);
+    std::memcpy(CMSG_DATA(part), memory_descriptors, sizeof(int) * count);
+    if (sendmsg(shared->options.gpu_socket, &header, MSG_NOSIGNAL) !=
+        static_cast<ssize_t>(sizeof(message))) {
+        LOG_ERROR(Render_Vulkan, "The images could not be sent to the frontend: {}",
+                  std::strerror(errno));
+        return false;
+    }
+    for (auto& in_flight : image_in_flight) {
+        in_flight = false;
+    }
+    gpu_frames_active = true;
+    LOG_INFO(Render_Vulkan, "The picture is handed to the frontend on the GPU: {} images of {}x{}",
+             count, width, height);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool GpuFramesActive() {
+    return gpu_frames_active;
+}
+
+std::uint32_t AcquireImage() {
+    // Up to a tenth of a second: the frontend holds one image and the newest is kept for it,
+    // which leaves three for frames being drawn. After that the wait is given up, and an image
+    // still being drawn is drawn over rather than the picture stopping.
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const std::uint32_t latest = shared->frame_latest.load();
+        const std::uint32_t newest = latest == 0 ? FRAME_SLOT_NONE : latest & FRAME_SLOT_MASK;
+        const std::uint32_t held = shared->frame_held.load();
+        for (std::uint32_t image = 0; image < FRAME_IMAGES; ++image) {
+            if (image != newest && image != held && !image_in_flight[image].exchange(true)) {
+                return image;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const std::uint32_t latest = shared->frame_latest.load();
+    const std::uint32_t newest = latest == 0 ? FRAME_SLOT_NONE : latest & FRAME_SLOT_MASK;
+    const std::uint32_t held = shared->frame_held.load();
+    std::uint32_t image = 0;
+    while (image == newest || image == held) {
+        ++image;
+    }
+    image_in_flight[image] = true;
+    return image;
+}
+
+void PushImage(std::uint32_t image, std::uint32_t width, std::uint32_t height) {
+    if (!shared || image >= FRAME_IMAGES) {
+        return;
+    }
+    shared->frame_size[image].width = width;
+    shared->frame_size[image].height = height;
+    const std::uint32_t latest = shared->frame_latest.load();
+    shared->frame_latest.store((((latest >> FRAME_SLOT_BITS) + 1) << FRAME_SLOT_BITS) | image);
+    image_in_flight[image] = false;
     frame_seen = true;
 }
 

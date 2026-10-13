@@ -70,6 +70,13 @@ public:
         return frame_index;
     }
 
+#ifdef LIBRETRO
+    /// Which of the images that stand in for a swapchain's the frame is drawn into
+    u32 GetImageIndex() const {
+        return image_index;
+    }
+#endif
+
     vk::Extent2D GetExtent() const {
         return extent;
     }
@@ -114,6 +121,11 @@ private:
 #ifdef LIBRETRO
     /// Creates the images that stand in for a swapchain's
     void CreateOffscreenImages();
+
+    /// Makes them of exportable memory and sends them to the frontend, when the picture is to
+    /// be handed over on the GPU. False when that cannot be done: the images are then to be
+    /// made the plain way
+    bool CreateSharedImages();
 #endif
 
 private:

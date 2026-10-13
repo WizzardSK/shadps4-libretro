@@ -25,6 +25,32 @@ void RemoveAudioStream(void* sdl_audio_stream);
 /// loaded. Called by the emulator once it has loaded its own configuration.
 void ApplyCoreOptions();
 
+/// Whether the picture is to be handed to the frontend on the GPU (libretro/gpu_frames.h): the
+/// core option says so and the frontend gave the core a Vulkan context.
+bool GpuFramesWanted();
+
+/// How many images the emulator draws its frames into then.
+std::uint32_t GpuFrameImages();
+
+/// The images that stand in for a swapchain, made of exportable memory: a descriptor of each
+/// one's memory, which is sent to the core and then belongs to it. The format and usage are
+/// Vulkan's values. False when they could not be sent; the picture then goes through system
+/// memory, as it does without this.
+bool ShareImages(const int* memory_descriptors, std::uint32_t count, std::uint32_t width,
+                 std::uint32_t height, std::uint32_t format, std::uint32_t usage,
+                 std::uint32_t memory_type, const std::uint64_t* allocation_sizes,
+                 const std::uint8_t* device_uuid, const std::uint8_t* driver_uuid);
+
+/// Whether the images were shared: finished frames are published with PushImage, not PushFrame.
+bool GpuFramesActive();
+
+/// The image to draw the next frame into: not the newest one published, not the one the core
+/// is showing, and not one still being drawn. Waits a moment when all are taken.
+std::uint32_t AcquireImage();
+
+/// A frame is finished in an image, the GPU's work on it done. Called from the renderer.
+void PushImage(std::uint32_t image, std::uint32_t width, std::uint32_t height);
+
 /// A pad's motors, 0 to 255 each, as the game set them. The pad is the controller's index.
 void SetRumble(std::uint32_t pad, std::uint8_t small_motor, std::uint8_t large_motor);
 

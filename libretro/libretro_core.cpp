@@ -41,6 +41,7 @@
 #include "common/scm_rev.h"
 #include "core/libraries/pad/pad.h"
 #include "libretro.h"
+#include "gpu_frames.h"
 #include "libretro_core_options.h"
 #include "shared_state.h"
 
@@ -52,6 +53,7 @@
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -100,6 +102,16 @@ std::vector<uint32_t> blank_frame;
 unsigned shown_width = 0;
 unsigned shown_height = 0;
 uint32_t shown_latest = 0;
+
+// The picture handed over on the GPU (gpu_frames.h): the frontend gave a Vulkan context, and
+// the frame shown is one of the emulator's images in place of a slot of the shared memory.
+bool gpu_frames = false;
+bool gpu_failure_told = false;
+uint32_t shown_image = 0;
+// The core's end of the socket the images' descriptors come over, and the emulator's until it
+// is started.
+int gpu_socket = -1;
+int gpu_socket_emulator = -1;
 
 // The Output Resolution the game was loaded with: the size frames come at, and so the largest
 // the frontend is told to expect. No larger - a frontend sizes its shader passes by it.
@@ -184,6 +196,8 @@ void ReadCoreOptions(Libretro::SharedOptions& options) {
     options.readback_linear_images = enabled("shadps4_readback_linear_images", "disabled");
     options.shader_cache = enabled("shadps4_shader_cache", "disabled");
     options.copy_gpu_buffers = enabled("shadps4_copy_gpu_buffers", "enabled");
+    options.gpu_frames = enabled("shadps4_gpu_frames", "disabled");
+    options.gpu_socket = -1;
     options.trophy_popup = enabled("shadps4_trophy_notifications", "enabled");
     const std::string side = OptionValue("shadps4_trophy_position", "right");
     options.trophy_side = side == "left" ? 0 : side == "top" ? 2 : side == "bottom" ? 3 : 1;
@@ -560,8 +574,8 @@ void TakeFrame() {
         }
         // Held first, then looked at again: once the slot is held and still the newest, the
         // emulator does not write into it, and it is shown from where it is.
-        const uint32_t slot = latest & 3;
-        if (slot >= Libretro::FRAME_SLOTS) {
+        const uint32_t slot = latest & Libretro::FRAME_SLOT_MASK;
+        if (slot >= (gpu_frames ? Libretro::FRAME_IMAGES : Libretro::FRAME_SLOTS)) {
             return;
         }
         shared->frame_held.store(slot);
@@ -574,7 +588,11 @@ void TakeFrame() {
             height > Libretro::MAX_HEIGHT) {
             return;
         }
-        shown_frame = Libretro::SharedFrame(shared, slot);
+        if (gpu_frames) {
+            shown_image = slot;
+        } else {
+            shown_frame = Libretro::SharedFrame(shared, slot);
+        }
         shown_latest = latest;
         if (width != shown_width || height != shown_height) {
             shown_width = width;
@@ -752,6 +770,26 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     std::strcpy(shared->user_dir, user_dir.c_str());
     ReadCoreOptions(shared->options);
     DescribeInput(shared->options.pads);
+    // The picture on the GPU, when the option asks for it and the frontend gives a Vulkan
+    // context: the emulator is told, and given its end of the socket its images come over.
+    gpu_frames = false;
+    gpu_failure_told = false;
+    shown_image = 0;
+#ifndef _WIN32
+    if (shared->options.gpu_frames != 0 && Libretro::GpuFrames::Request(environ_cb, log_cb)) {
+        gpu_frames = true;
+        int pair[2];
+        if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair) == 0) {
+            gpu_socket = pair[0];
+            gpu_socket_emulator = pair[1];
+            fcntl(gpu_socket, F_SETFD, FD_CLOEXEC);
+            shared->options.gpu_socket = gpu_socket_emulator;
+        } else {
+            Log(RETRO_LOG_ERROR, "No socket for the emulator's images: %s", std::strerror(errno));
+        }
+    }
+#endif
+    shared->options.gpu_frames = gpu_frames && shared->options.gpu_socket >= 0;
     output_width = shared->options.width;
     output_height = shared->options.height;
     for (auto& axes : shared->axes) {
@@ -772,7 +810,15 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     Log(RETRO_LOG_INFO, "shadPS4 %s (%s), user directory %s", Common::g_version,
         Common::g_scm_rev, user_dir.c_str());
     Log(RETRO_LOG_INFO, "Starting %s", game->path);
-    if (!StartEmulator(argument)) {
+    const bool started = StartEmulator(argument);
+#ifndef _WIN32
+    // The emulator has its end now, or was not started.
+    if (gpu_socket_emulator >= 0) {
+        close(gpu_socket_emulator);
+        gpu_socket_emulator = -1;
+    }
+#endif
+    if (!started) {
         DestroyShared();
         return false;
     }
@@ -789,8 +835,16 @@ RETRO_API void retro_unload_game(void) {
         shared->quit.store(1, std::memory_order_release);
     }
     StopEmulator();
-    // The frame shown was in the shared memory.
+    // The frame shown was in the shared memory, or one of the emulator's images.
     shown_frame = nullptr;
+    Libretro::GpuFrames::Close();
+#ifndef _WIN32
+    if (gpu_socket >= 0) {
+        close(gpu_socket);
+        gpu_socket = -1;
+    }
+#endif
+    gpu_frames = false;
     DestroyShared();
     emulator_running = false;
 }
@@ -831,13 +885,33 @@ RETRO_API void retro_run(void) {
 
         SendInput();
         ApplyRumble();
+        if (gpu_frames) {
+            Libretro::GpuFrames::Receive(gpu_socket);
+            if (const char* failure = Libretro::GpuFrames::Failure();
+                failure && !gpu_failure_told) {
+                gpu_failure_told = true;
+                char text[320];
+                std::snprintf(text, sizeof(text),
+                              "shadPS4: no picture on the GPU (%s). Turn the core option GPU "
+                              "Frame Hand-over off and start the game again.",
+                              failure);
+                Notify(text);
+            }
+        }
         TakeFrame();
         TakeAudio(sound);
     } else {
         std::memset(sound, 0, sizeof(sound));
     }
 
-    if (video_cb) {
+    if (video_cb && gpu_frames) {
+        if (shown_width == 0 || shown_height == 0) {
+            shown_width = output_width;
+            shown_height = output_height;
+        }
+        Libretro::GpuFrames::Show(video_cb, shown_image, shown_latest != 0, shown_width,
+                                  shown_height);
+    } else if (video_cb) {
         if (!shown_frame) {
             // Nothing drawn yet: black, at the size declared.
             blank_frame.assign(static_cast<std::size_t>(output_width) * output_height, 0);

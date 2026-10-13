@@ -1340,8 +1340,11 @@ if (ENABLE_LIBRETRO)
         ${VIDEO_CORE}
         ${EMULATOR}
         ${SHADNET}
+        libretro/gpu_frames.cpp
+        libretro/gpu_frames.h
         libretro/host.cpp
         libretro/libretro.h
+        libretro/libretro_vulkan.h
         libretro/libretro_bridge.h
         libretro/libretro_core.cpp
         libretro/libretro_core_options.h

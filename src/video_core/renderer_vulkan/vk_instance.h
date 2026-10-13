@@ -319,6 +319,14 @@ public:
         return properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
     }
 
+#ifdef LIBRETRO
+    /// Whether the device can export an image's memory as a descriptor, which is how the
+    /// libretro core hands the picture to the frontend on the GPU
+    bool IsExternalMemoryFdSupported() const {
+        return external_memory_fd;
+    }
+#endif
+
     /// Returns the pipeline cache unique identifier
     const auto GetPipelineCacheUUID() const {
         return properties.pipelineCacheUUID;
@@ -543,6 +551,9 @@ private:
     bool image_view_min_lod{};
     bool shader_clock{};
     bool supports_memory_budget{};
+#ifdef LIBRETRO
+    bool external_memory_fd{};
+#endif
     bool supports_block_texel_view{};
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;

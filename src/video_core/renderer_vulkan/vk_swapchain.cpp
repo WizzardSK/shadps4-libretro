@@ -10,6 +10,12 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
+#ifdef LIBRETRO
+#include "libretro/libretro_bridge.h"
+#if defined(__linux__)
+#include <unistd.h>
+#endif
+#endif
 
 namespace Vulkan {
 
@@ -52,14 +58,26 @@ void Swapchain::Create(u32 width_, u32 height_) {
     height = height_;
     needs_recreation = false;
 
+#ifdef LIBRETRO
+    // Images the frontend has are kept: it was sent them once, and draws from them.
+    if (Libretro::GpuFramesActive() && !images.empty()) {
+        return;
+    }
+#endif
+
     Destroy();
 
 #ifdef LIBRETRO
     extent = vk::Extent2D{std::max(width, 1u), std::max(height, 1u)};
-    image_count = OFFSCREEN_IMAGE_COUNT;
     image_index = 0;
     frame_index = 0;
-    CreateOffscreenImages();
+    // Handed to the frontend on the GPU where that can be done; otherwise each finished frame
+    // is read back, as before.
+    image_count = Libretro::GpuFrameImages();
+    if (!CreateSharedImages()) {
+        image_count = OFFSCREEN_IMAGE_COUNT;
+        CreateOffscreenImages();
+    }
     SetupImages();
     RefreshSemaphores();
     return;
@@ -130,7 +148,9 @@ void Swapchain::SetHDR(bool hdr) {
 
 bool Swapchain::AcquireNextImage() {
 #ifdef LIBRETRO
-    image_index = (image_index + 1) % image_count;
+    // An image the frontend is not showing, when it shows them itself.
+    image_index = Libretro::GpuFramesActive() ? Libretro::AcquireImage()
+                                              : (image_index + 1) % image_count;
     return true;
 #endif
     vk::Device device = instance.GetDevice();
@@ -351,6 +371,138 @@ void Swapchain::RefreshSemaphores() {
 }
 
 #ifdef LIBRETRO
+bool Swapchain::CreateSharedImages() {
+#if defined(__linux__)
+    // Once only: the images' descriptors are sent to the frontend once, and the picture's size
+    // does not change while a game runs.
+    if (!Libretro::GpuFramesWanted() || Libretro::GpuFramesActive() ||
+        !instance.IsExternalMemoryFdSupported()) {
+        return false;
+    }
+    const vk::Device device = instance.GetDevice();
+    const auto memory_properties = instance.GetPhysicalDevice().getMemoryProperties();
+    const auto handle_type = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+    // The frontend makes the same images on this memory (libretro/gpu_frames.cpp, Import):
+    // what is set here is what it is told.
+    const vk::ImageUsageFlags usage =
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc |
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+
+    std::vector<int> descriptors;
+    std::vector<u64> sizes;
+    u32 memory_type = std::numeric_limits<u32>::max();
+    const auto give_up = [&] {
+        for (const int descriptor : descriptors) {
+            close(descriptor);
+        }
+        for (const auto& image : images) {
+            device.destroyImage(image);
+        }
+        images.clear();
+        for (const auto& memory : offscreen_memory) {
+            device.freeMemory(memory);
+        }
+        offscreen_memory.clear();
+        return false;
+    };
+
+    for (u32 i = 0; i < image_count; ++i) {
+        const vk::ExternalMemoryImageCreateInfo external_info = {
+            .handleTypes = handle_type,
+        };
+        const vk::ImageCreateInfo image_info = {
+            .pNext = &external_info,
+            .imageType = vk::ImageType::e2D,
+            .format = surface_format.format,
+            .extent = {extent.width, extent.height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = usage,
+            .sharingMode = vk::SharingMode::eExclusive,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        };
+        auto [image_result, image] = device.createImage(image_info);
+        if (image_result != vk::Result::eSuccess) {
+            LOG_WARNING(Render_Vulkan, "No exportable image for the frontend: {}",
+                        vk::to_string(image_result));
+            return give_up();
+        }
+        images.push_back(image);
+
+        const auto requirements = device.getImageMemoryRequirements(image);
+        if (memory_type == std::numeric_limits<u32>::max()) {
+            for (u32 type = 0; type < memory_properties.memoryTypeCount; ++type) {
+                const bool allowed = (requirements.memoryTypeBits & (1u << type)) != 0;
+                const bool device_local =
+                    static_cast<bool>(memory_properties.memoryTypes[type].propertyFlags &
+                                      vk::MemoryPropertyFlagBits::eDeviceLocal);
+                if (allowed && device_local) {
+                    memory_type = type;
+                    break;
+                }
+            }
+        }
+        if (memory_type == std::numeric_limits<u32>::max() ||
+            (requirements.memoryTypeBits & (1u << memory_type)) == 0) {
+            LOG_WARNING(Render_Vulkan, "No device memory type for the frontend's images");
+            return give_up();
+        }
+
+        const vk::ExportMemoryAllocateInfo export_info = {
+            .handleTypes = handle_type,
+        };
+        const vk::MemoryAllocateInfo allocate_info = {
+            .pNext = &export_info,
+            .allocationSize = requirements.size,
+            .memoryTypeIndex = memory_type,
+        };
+        auto [memory_result, memory] = device.allocateMemory(allocate_info);
+        if (memory_result != vk::Result::eSuccess) {
+            LOG_WARNING(Render_Vulkan, "No exportable memory for the frontend's images: {}",
+                        vk::to_string(memory_result));
+            return give_up();
+        }
+        offscreen_memory.push_back(memory);
+        if (device.bindImageMemory(image, memory, 0) != vk::Result::eSuccess) {
+            return give_up();
+        }
+
+        auto [descriptor_result, descriptor] = device.getMemoryFdKHR(vk::MemoryGetFdInfoKHR{
+            .memory = memory,
+            .handleType = handle_type,
+        });
+        if (descriptor_result != vk::Result::eSuccess) {
+            LOG_WARNING(Render_Vulkan, "The frontend's images could not be exported: {}",
+                        vk::to_string(descriptor_result));
+            return give_up();
+        }
+        descriptors.push_back(descriptor);
+        sizes.push_back(requirements.size);
+    }
+
+    const auto ids = instance.GetPhysicalDevice()
+                         .getProperties2<vk::PhysicalDeviceProperties2,
+                                         vk::PhysicalDeviceIDProperties>()
+                         .get<vk::PhysicalDeviceIDProperties>();
+    if (!Libretro::ShareImages(descriptors.data(), image_count, extent.width, extent.height,
+                               static_cast<u32>(surface_format.format),
+                               static_cast<u32>(static_cast<VkImageUsageFlags>(usage)),
+                               memory_type, sizes.data(), ids.deviceUUID.data(),
+                               ids.driverUUID.data())) {
+        return give_up();
+    }
+    // Sent: the frontend's process has its own copies of them now.
+    for (const int descriptor : descriptors) {
+        close(descriptor);
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
 void Swapchain::CreateOffscreenImages() {
     const vk::Device device = instance.GetDevice();
     const auto memory_properties = instance.GetPhysicalDevice().getMemoryProperties();

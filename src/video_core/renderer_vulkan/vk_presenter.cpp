@@ -1058,8 +1058,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
 #ifdef LIBRETRO
         // Every frame is read back for the frontend, by the way a screenshot with overlays is,
-        // into a buffer that is used again.
-        const bool read_back_frame = true;
+        // into a buffer that is used again - unless the frontend draws from the image itself.
+        const bool read_back_frame = !Libretro::GpuFramesActive();
 #else
         const bool read_back_frame = capture_with_overlays_count > 0;
 #endif
@@ -1116,7 +1116,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             .srcAccessMask = post_src_access_mask,
             .dstAccessMask = vk::AccessFlagBits::eNone,
             .oldLayout = post_old_layout,
+#ifdef LIBRETRO
+            // What the frontend is told an image it draws from is in
+            // (libretro/gpu_frames.cpp, Import).
+            .newLayout = Libretro::GpuFramesActive() ? vk::ImageLayout::eShaderReadOnlyOptimal
+                                                     : vk::ImageLayout::ePresentSrcKHR,
+#else
             .newLayout = vk::ImageLayout::ePresentSrcKHR,
+#endif
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image = swapchain_image,
@@ -1142,6 +1149,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
     // Flush vulkan commands.
 #ifdef LIBRETRO
+    if (Libretro::GpuFramesActive()) {
+        // The frame is the image: published once the GPU has drawn it.
+        const vk::Extent2D shown = swapchain.GetExtent();
+        scheduler.DeferPriorityOperation(
+            [image = swapchain.GetImageIndex(), width = shown.width, height = shown.height]() {
+                Libretro::PushImage(image, width, height);
+            });
+    }
     if (frame_readback) {
         scheduler.DeferPriorityOperation([readback = std::move(frame_readback)]() {
             const u64 size = static_cast<u64>(readback->width) * readback->height * 4;
