@@ -599,6 +599,52 @@ void TakeAudio(int16_t* out) {
     shared->audio_read.store(read + frames, std::memory_order_release);
 }
 
+// The names of the pad's buttons and sticks, for the ports that are controllers: what the
+// frontend shows on its remapping screen. They follow SendInput.
+void DescribeInput(std::uint32_t pads) {
+    static constexpr struct {
+        unsigned device;
+        unsigned index;
+        unsigned id;
+        const char* name;
+    } controls[] = {
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B, "Cross"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A, "Circle"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Square"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Triangle"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP, "D-Pad Up"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN, "D-Pad Down"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT, "D-Pad Left"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "D-Pad Right"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, "L1"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "R1"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "L2"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "R2"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3, "L3"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3, "R3"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Options"},
+        {RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "Touchpad Button"},
+        {RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X,
+         "Left Stick X"},
+        {RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y,
+         "Left Stick Y"},
+        {RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X,
+         "Right Stick X"},
+        {RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y,
+         "Right Stick Y"},
+    };
+    // Kept: the frontend may hold on to the pointer.
+    static std::vector<retro_input_descriptor> descriptors;
+    descriptors.clear();
+    for (unsigned pad = 0; pad < pads && pad < Libretro::MAX_PADS; ++pad) {
+        for (const auto& control : controls) {
+            descriptors.push_back({pad, control.device, control.index, control.id, control.name});
+        }
+    }
+    descriptors.push_back({});
+    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, descriptors.data());
+}
+
 } // namespace
 
 extern "C" {
@@ -699,6 +745,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     std::strcpy(shared->eboot_path, game->path);
     std::strcpy(shared->user_dir, user_dir.c_str());
     ReadCoreOptions(shared->options);
+    DescribeInput(shared->options.pads);
     output_width = shared->options.width;
     output_height = shared->options.height;
     for (auto& axes : shared->axes) {

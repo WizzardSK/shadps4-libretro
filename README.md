@@ -54,7 +54,7 @@ Everything the core keeps is in `system/shadPS4/`, laid out as standalone shadPS
 
 ## Controls
 
-RetroArch's ports 1 to 4 are the console's controllers, as many as the core option Controllers says (one by default): buttons, both sticks, analog triggers and rumble. Select is the touchpad button.
+RetroArch's ports 1 to 4 are the console's controllers, as many as the core option Controllers says (one by default): buttons, both sticks, analog triggers and rumble. Select is the touchpad button. RetroArch's Controls menu shows the buttons under their PS4 names, for remapping.
 
 ## Core options
 

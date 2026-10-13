@@ -4,6 +4,7 @@ What changed in the libretro core of this fork, newest first. Changes that come 
 
 ## Unreleased
 
+- The frontend is told the names of the controls: RetroArch's Controls menu showed nothing for the core's ports, and now lists the PS4 buttons and sticks of as many ports as the Controllers option says. Not yet run by anyone.
 - A race in the emulator's wait for an idle GPU thread is closed: an idle signal that arrived late could release the game to submit its next frame while a command buffer was still waiting. It was meant to end Sonic Mania stopping with "Out of order flip IRQ" when Mania Mode is entered, and does not: the game still stops there with this build, on Linux. Standalone 0.19.0 does not stop there.
 - Linux: a crash of the emulator is reported at once. The system wrote a core dump of the emulator's process first, which is the console's whole address space: it took over a minute, could use up the machine's memory, and until it was done the frontend showed a still picture with no message. The process no longer leaves a core dump. Tried on Linux by setting the same limit on a running core from outside, not yet with a build.
 - The hidden window is no longer given an icon. Nobody sees it, and on Linux its video driver cannot take one, so every start logged an error about it. Tried on Linux.
