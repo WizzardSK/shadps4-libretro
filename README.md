@@ -25,9 +25,32 @@ The frames are copied through system memory on their way to RetroArch, which cos
 
 ## Content
 
-A dumped PS4 game as a folder; load its `eboot.bin`. No BIOS is needed. Some games need system modules and fonts dumped from a console; without dumped fonts some games show no text or are unstable.
+A dumped PS4 game as a folder; load its `eboot.bin`.
 
-Everything the core keeps is in `system/shadPS4/`, laid out as standalone shadPS4's user folder, so what is set up there can be copied over: settings, save data, the shader cache, the folders for dumped system modules and fonts, and the emulator's log, `log/shadps4.log`.
+## System modules and fonts
+
+The PS4 has no BIOS file, and the core starts without one. What takes its place are system modules and fonts dumped from a console's firmware, and some games do not start without them:
+
+- **System modules** (`.sprx` files) go into `system/shadPS4/sys_modules/`.
+- **Fonts** go into `system/shadPS4/fonts/font/` and `system/shadPS4/fonts/font2/`, the console's two font folders. Without them some games show no text or are unstable.
+
+The core creates these folders the first time a game is started. They have to be dumped from your own console; the core does not download them.
+
+The emulator has its own replacement for some modules and uses it when the dumped file is missing: `libSceLibcInternal`, `libSceNgs2`, `libSceAvPlayer`, `libSceRtc`, `libSceJpegEnc`, `libScePngDec`, `libScePngEnc`, `libSceFont`, `libSceFontFt`, `libSceRudp`, `libSceSystemGesture`. The dumped module is still the better choice where there is one.
+
+For the others there is no replacement, and a game that calls into one that is missing usually stops: `libSceUlt`, `libSceJpegDec`, `libSceJson`, `libSceJson2`, `libSceCesCs`, `libSceFreeTypeOt`, `libSceFreeTypeOl`, `libSceFreeTypeOptOl`, `libSceAvPlayerStreaming`, `libSceAt9Enc`, `libSceAudiodec` and its `libSceAudiodecCpu*` modules, `libSceBeisobmf`, `libSceBemp2sys`, `libSceWkFontConfig`, `libScePsmKitSystem`, `libSceDepth`, `libScePadTracker`, `libSceMoveTracker`, `libSceXml`.
+
+When a game stops at start, look in `system/shadPS4/log/shad_log.txt` for these lines. They name what is missing:
+
+```
+No HLE available for libSceJpegDec.sprx module
+Can't Load libSceLibcInternal.sprx switching to HLE
+No dumped system fonts, expect missing text or instability
+```
+
+## Files
+
+Everything the core keeps is in `system/shadPS4/`, laid out as standalone shadPS4's user folder, so what is set up there can be copied over: settings, save data, the shader cache, the folders for dumped system modules and fonts, and the emulator's logs in `log/`: `shadps4.log` covers the start, and from the point a game is loaded the log is `shad_log.txt` (or a file named after the game's ID with the core option Separate Log Files).
 
 ## Controls
 
