@@ -80,6 +80,16 @@ static constexpr u32 tessellation_offchip_buffer_size = 0x800000u;
 
 static void ResetSubmissionLock(Platform::InterruptId irq) {
     std::unique_lock lock{m_wait_idle};
+#ifdef LIBRETRO
+    // The GPU thread signals idle after it has seen its queues empty, and the game can submit
+    // and take the lock in between: the signal for the init sequence then released the lock
+    // while the frame's command buffer was still waiting, the game went on to its next frame
+    // and wrote over that buffer ("Out of order flip IRQ"). With something submitted the GPU
+    // thread is not idle; it signals again once that is done.
+    if (!liverpool->IsGpuIdle()) {
+        return;
+    }
+#endif
     submission_lock = 0;
     cv_lock.notify_all();
 }
@@ -1470,8 +1480,15 @@ s32 PS4_SYSV_ABI sceGnmRequestFlipAndSubmitDoneForWorkload(u64 workload, u32* gp
     }
     liverpool->SubmitGfx(dcb_span, {});
 
-    if (!liverpool->IsGpuIdle()) {
-        submission_lock = true;
+    {
+#ifdef LIBRETRO
+        // Under the mutex ResetSubmissionLock checks the queues under, so its check and this
+        // one cannot cross.
+        std::unique_lock lock{m_wait_idle};
+#endif
+        if (!liverpool->IsGpuIdle()) {
+            submission_lock = true;
+        }
     }
     liverpool->SubmitDone();
     send_init_packet = true;
@@ -2473,8 +2490,15 @@ s32 PS4_SYSV_ABI sceGnmSubmitDone() {
     LOG_DEBUG(Lib_GnmDriver, "called");
     std::scoped_lock lk{m_submit_lock};
     WaitGpuIdle();
-    if (!liverpool->IsGpuIdle()) {
-        submission_lock = true;
+    {
+#ifdef LIBRETRO
+        // Under the mutex ResetSubmissionLock checks the queues under, so its check and this
+        // one cannot cross.
+        std::unique_lock lock{m_wait_idle};
+#endif
+        if (!liverpool->IsGpuIdle()) {
+            submission_lock = true;
+        }
     }
     liverpool->SubmitDone();
     send_init_packet = true;
