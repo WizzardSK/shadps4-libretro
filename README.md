@@ -59,12 +59,12 @@ RetroArch's ports 1 to 4 are the console's controllers, as many as the core opti
 ## Core options
 
 - **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, Controllers, Show Splash Screen
-- **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Shader Cache, Show FPS Counter
+- **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, Shader Cache, Show FPS Counter
 - **Audio:** Volume
 - **Trophies:** Trophy Notifications, Trophy Notification Position, Trophy Notification Duration
 - **Logging:** Logging, Separate Log Files, Log Sync
 
-They are the settings of standalone shadPS4's settings dialog that apply to a core, with its defaults, and take effect when the next game is started. Settings without a core option are in the emulator's config files under `system/shadPS4/`; a per-game setting there wins over the core option. The option texts are translated through libretro's [Crowdin project](https://crowdin.com/project/libretro).
+They are the settings of standalone shadPS4's settings dialog that apply to a core, with its defaults, and take effect when the next game is started. The one default that differs is Copy GPU Buffers, on in the core: its picture reaches RetroArch a frame or two late, which makes the fault that setting gets around a regular one. Settings without a core option are in the emulator's config files under `system/shadPS4/`; a per-game setting there wins over the core option. The option texts are translated through libretro's [Crowdin project](https://crowdin.com/project/libretro).
 
 There are no save states: the emulator has none.
 

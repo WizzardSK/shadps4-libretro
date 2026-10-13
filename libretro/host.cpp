@@ -294,6 +294,7 @@ void ApplyCoreOptions() {
     EmulatorSettings.SetRcasAttenuation(options.rcas_attenuation);
     EmulatorSettings.SetReadbackLinearImagesEnabled(options.readback_linear_images != 0);
     EmulatorSettings.SetPipelineCacheEnabled(options.shader_cache != 0);
+    EmulatorSettings.SetCopyGpuBuffers(options.copy_gpu_buffers != 0);
     EmulatorSettings.SetTrophyPopupDisabled(options.trophy_popup == 0);
     static constexpr const char* trophy_sides[] = {"left", "right", "top", "bottom"};
     EmulatorSettings.SetTrophyNotificationSide(trophy_sides[std::min(options.trophy_side, 3u)]);

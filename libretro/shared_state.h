@@ -12,7 +12,7 @@
 namespace Libretro {
 
 inline constexpr std::uint32_t SHARED_MAGIC = 0x34505368; // "hSP4"
-inline constexpr std::uint32_t SHARED_VERSION = 3;
+inline constexpr std::uint32_t SHARED_VERSION = 4;
 
 inline constexpr std::uint32_t MAX_WIDTH = 3840;
 inline constexpr std::uint32_t MAX_HEIGHT = 2160;
@@ -65,6 +65,7 @@ struct SharedOptions {
     std::int32_t rcas_attenuation;
     std::uint32_t readback_linear_images;
     std::uint32_t shader_cache;
+    std::uint32_t copy_gpu_buffers;
     std::uint32_t trophy_popup;
     /// 0 left, 1 right, 2 top, 3 bottom.
     std::uint32_t trophy_side;

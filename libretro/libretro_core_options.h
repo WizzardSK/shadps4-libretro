@@ -374,6 +374,25 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         "disabled"
     },
     {
+        // On by default, unlike the standalone's setting. The core's picture reaches the
+        // frontend a frame or two after the game flipped it, so a game's command buffer
+        // regularly waits in the GPU thread while the game already builds its next frame in
+        // the same memory, and the flip that follows is for the wrong buffer ("Out of order
+        // flip IRQ", Sonic Mania on entering Mania Mode).
+        "shadps4_copy_gpu_buffers",
+        "Copy GPU Buffers",
+        NULL,
+        "Copies a game's command buffers when it submits them, so the game cannot write its next frame over one the emulator has not drawn yet. Without it some games stop with an out of order flip. Costs a little speed.",
+        NULL,
+        "video",
+        {
+            { "disabled", NULL },
+            { "enabled", NULL },
+            { NULL, NULL },
+        },
+        "enabled"
+    },
+    {
         "shadps4_shader_cache",
         "Shader Cache",
         NULL,

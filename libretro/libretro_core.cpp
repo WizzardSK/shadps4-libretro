@@ -180,6 +180,7 @@ void ReadCoreOptions(Libretro::SharedOptions& options) {
         std::clamp(std::atoi(OptionValue("shadps4_rcas_attenuation", "250").c_str()), 0, 3000);
     options.readback_linear_images = enabled("shadps4_readback_linear_images", "disabled");
     options.shader_cache = enabled("shadps4_shader_cache", "disabled");
+    options.copy_gpu_buffers = enabled("shadps4_copy_gpu_buffers", "enabled");
     options.trophy_popup = enabled("shadps4_trophy_notifications", "enabled");
     const std::string side = OptionValue("shadps4_trophy_position", "right");
     options.trophy_side = side == "left" ? 0 : side == "top" ? 2 : side == "bottom" ? 3 : 1;
