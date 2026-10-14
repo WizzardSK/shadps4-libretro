@@ -102,6 +102,9 @@ Ucontext::Ucontext(siginfo_t const* inf, ucontext_t* raw_context) {
     uc_mcontext.mc_rip = regs[REG_RIP];
     uc_mcontext.mc_addr = reinterpret_cast<uint64_t>(inf->si_addr);
 #endif
+#elif defined(ARCH_ARM64)
+    // The guest's registers are not in the host's signal context here: they
+    // are the translator's, and nothing is converted yet.
 #else
 #error "ucontext_t conversion not implemented for current architecture."
 #endif
@@ -225,6 +228,9 @@ void Ucontext::SyncHostFromGuest() {
     // regs[REG_CSGSFS] |= (greg_t{uc_mcontext.mc_gs} << 16);
     regs[REG_RIP] = uc_mcontext.mc_rip;
 #endif
+#elif defined(ARCH_ARM64)
+    // The guest's registers are not in the host's signal context here: they
+    // are the translator's, and nothing is converted yet.
 #else
 #error "ucontext_t conversion not implemented for current architecture."
 #endif

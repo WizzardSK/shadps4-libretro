@@ -344,6 +344,18 @@ public:
         return properties.pipelineCacheUUID;
     }
 
+#ifdef LIBRETRO
+    /// Whether a sparse buffer may be used with parts of it left unbound
+    bool IsSparseResidencyBufferSupported() const {
+        return features.sparseResidencyBuffer;
+    }
+
+    /// Returns how much address space all sparse resources of the device share
+    vk::DeviceSize SparseAddressSpaceSize() const {
+        return properties.limits.sparseAddressSpaceSize;
+    }
+#endif
+
     /// Returns the minimum required alignment for uniforms
     vk::DeviceSize UniformMinAlignment() const {
         return properties.limits.minUniformBufferOffsetAlignment;

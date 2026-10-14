@@ -62,9 +62,18 @@ u64 GetStub(const char* nid) {
     }
 
     e.code = std::make_unique<Xbyak::CodeGenerator>(32, Xbyak::AutoGrow);
+#ifdef ARCH_X86_64
     e.code->mov(e.code->rdi, index);
     e.code->mov(e.code->rax, reinterpret_cast<u64>(&CommonStub));
     e.code->jmp(e.code->rax);
+#else
+    // The same three instructions as bytes: the stub is the guest's code, x86-64
+    // on any host, and Xbyak's registers exist only on an x86 host.
+    const u64 target = reinterpret_cast<u64>(&CommonStub);
+    e.code->db(0x48), e.code->db(0xBF), e.code->dq(index); // mov rdi, index
+    e.code->db(0x48), e.code->db(0xB8), e.code->dq(target); // mov rax, &CommonStub
+    e.code->db(0xFF), e.code->db(0xE0); // jmp rax
+#endif
     e.code->ready();
 
     g_stub_entries.push_back(std::move(e));

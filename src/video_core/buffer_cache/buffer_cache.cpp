@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <bit>
 #include <magic_enum/magic_enum.hpp>
 
 #include "common/alignment.h"
@@ -56,9 +57,34 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
       memory_semaphore{instance} {
+    vk::BufferCreateFlags sparse_flags =
+        vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
+#ifdef LIBRETRO
+    // An arena is a sparse buffer over 4 GiB of the guest's address space, and a game uses
+    // several. A device whose sparse resources share less address space than a few of those
+    // (Adreno 618 has 4 GiB in all) could not make the first one, so there the arenas are
+    // smaller: a sixty-fourth of what the device has, no less than 64 MiB. And a device
+    // without sparse residency is not asked for it: the ranges a draw uses are bound before
+    // it (EnsureResident), only direct memory access reads outside them.
+    if (!instance.IsSparseResidencyBufferSupported()) {
+        sparse_flags = vk::BufferCreateFlagBits::eSparseBinding;
+    }
+    const u64 sparse_space = instance.SparseAddressSpaceSize();
+    if (sparse_space != 0 && sparse_space < (u64{64} << DEFAULT_ARENA_PAGE_BITS)) {
+        ARENA_PAGE_BITS = std::clamp<u64>(std::bit_width(sparse_space) - 1 - 6, MIN_ARENA_PAGE_BITS,
+                                          DEFAULT_ARENA_PAGE_BITS);
+        ARENA_PAGE_SIZE = u64{1} << ARENA_PAGE_BITS;
+        NUM_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - ARENA_PAGE_BITS);
+        LOG_WARNING(Render,
+                    "The device has {} MiB of sparse address space: arena pages of {} MiB, "
+                    "sparse residency {}",
+                    sparse_space >> 20, ARENA_PAGE_SIZE >> 20,
+                    instance.IsSparseResidencyBufferSupported() ? "used" : "not available");
+    }
+#endif
+    address_space.resize(NUM_ARENA_PAGES);
     const vk::BufferCreateInfo probe_ci = {
-        .flags =
-            vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency,
+        .flags = sparse_flags,
         .size = ARENA_PAGE_SIZE,
         .usage = ARENA_USAGE,
         .sharingMode = vk::SharingMode::eExclusive,
@@ -225,8 +251,28 @@ void BufferCache::SynchronizeDmaBuffers() {
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
+#ifdef LIBRETRO
+    // With small arena pages one buffer can cover several of them: one arena over all of
+    // them, as long as none has an arena yet.
+    if (last_page - first_page > 1) {
+        const bool all_free = std::all_of(address_space.begin() + first_page,
+                                          address_space.begin() + last_page + 1,
+                                          [](const Buffer* arena) { return arena == nullptr; });
+        ASSERT_MSG(all_free, "Buffer request spans {} VA arena pages, some of them in use",
+                   last_page - first_page + 1);
+        const u64 base_block = Common::AlignDownPow2<u64>(first_block, blocks_per_arena_page);
+        const u64 num_pages = last_page - first_page + 1;
+        const auto* new_arena =
+            &arenas.emplace_back(instance, base_block << block_shift, num_pages << ARENA_PAGE_BITS,
+                                 MemoryType::Sparse);
+        std::fill(address_space.begin() + first_page, address_space.begin() + last_page + 1,
+                  new_arena);
+        return new_arena;
+    }
+#else
     ASSERT_MSG(last_page - first_page <= 1,
                "Buffer request cannot span more than two VA arena pages");
+#endif
 
     const auto* first_arena = address_space[first_page];
     const auto* last_arena = address_space[last_page];

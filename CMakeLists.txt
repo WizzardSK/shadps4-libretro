@@ -1379,6 +1379,36 @@ if (ENABLE_LIBRETRO)
             DEPENDS shadps4_libretro_host ${CMAKE_CURRENT_SOURCE_DIR}/libretro/embed_host.cmake
             VERBATIM)
         target_sources(shadps4 PRIVATE "${LIBRETRO_HOST_BLOB}")
+
+        # The C++ runtime is linked in: on aarch64 the x86-64 build runs under box64,
+        # which has no x86-64 libstdc++ to give it.
+        target_link_options(shadps4 PRIVATE -static-libstdc++ -static-libgcc)
+
+        # On aarch64 the core carries the x86-64 emulator and box64, which it writes into
+        # the frontend's system directory and starts its emulator process through
+        # (libretro_core.cpp). LIBRETRO_X86_64_PARTS is a directory with box64, the x86-64
+        # build's shadps4_libretro_host and its shadps4_libretro.so.
+        set(LIBRETRO_X86_64_PARTS "" CACHE PATH "box64 and the x86-64 build, for the aarch64 core")
+        if (ARCHITECTURE STREQUAL "arm64" AND LIBRETRO_X86_64_PARTS)
+            set(LIBRETRO_PARTS_ASM "${CMAKE_CURRENT_BINARY_DIR}/libretro_x86_64_parts.S")
+            set(LIBRETRO_PARTS_TEXT ".section .rodata\n")
+            foreach (part box64 shadps4_libretro_host shadps4_libretro.so)
+                if (NOT EXISTS "${LIBRETRO_X86_64_PARTS}/${part}")
+                    message(FATAL_ERROR "${LIBRETRO_X86_64_PARTS}/${part} is missing")
+                endif()
+                string(MAKE_C_IDENTIFIER "${part}" symbol)
+                string(APPEND LIBRETRO_PARTS_TEXT
+                    ".balign 16\n.globl g_part_${symbol}\n.hidden g_part_${symbol}\ng_part_${symbol}:\n"
+                    ".incbin \"${LIBRETRO_X86_64_PARTS}/${part}\"\n"
+                    ".globl g_part_${symbol}_end\n.hidden g_part_${symbol}_end\ng_part_${symbol}_end:\n")
+            endforeach()
+            string(APPEND LIBRETRO_PARTS_TEXT ".section .note.GNU-stack,\"\",%progbits\n")
+            file(WRITE "${LIBRETRO_PARTS_ASM}" "${LIBRETRO_PARTS_TEXT}")
+            set_source_files_properties("${LIBRETRO_PARTS_ASM}" PROPERTIES OBJECT_DEPENDS
+                "${LIBRETRO_X86_64_PARTS}/box64;${LIBRETRO_X86_64_PARTS}/shadps4_libretro_host;${LIBRETRO_X86_64_PARTS}/shadps4_libretro.so")
+            target_sources(shadps4 PRIVATE "${LIBRETRO_PARTS_ASM}")
+            target_compile_definitions(shadps4 PRIVATE LIBRETRO_X86_64_PARTS)
+        endif()
     endif()
 else()
 add_executable(shadps4

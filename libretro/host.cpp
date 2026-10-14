@@ -32,6 +32,7 @@
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/singleton.h"
+#include "core/devtools/layer.h"
 #include "core/emulator_settings.h"
 #include "core/ipc/ipc.h"
 #include "core/libraries/pad/pad.h"
@@ -42,6 +43,7 @@
 #include "libretro.h"
 #include "libretro_bridge.h"
 #include "shared_state.h"
+#include "video_core/renderer_vulkan/vk_presenter.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -50,6 +52,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
+
+// The presenter, as upstream's IPC and devtools reach it
+extern std::unique_ptr<Vulkan::Presenter> presenter;
 
 namespace {
 
@@ -93,8 +98,39 @@ Libretro::SharedState* OpenShared(const char* argument) {
 
 // Content closed in the frontend: the emulator ends the way it does when its window is closed,
 // which runs its at_quick_exit work (play time, logs, save data backups).
+constexpr const char* trophy_sides[] = {"left", "right", "top", "bottom"};
+
+// The options changed while the game runs, where the emulator reads them as it goes: the
+// volume and the trophy notifications from its settings, FSR from the presenter's own copy and
+// the FPS counter from the overlay's, which upstream's IPC changes the same way.
+void ApplyLiveOptions() {
+    const auto& live = shared->live;
+    EmulatorSettings.SetVolumeSlider(live.volume.load());
+    EmulatorSettings.SetFsrEnabled(live.fsr.load() != 0);
+    EmulatorSettings.SetRcasEnabled(live.rcas.load() != 0);
+    EmulatorSettings.SetRcasAttenuation(live.rcas_attenuation.load());
+    if (presenter) {
+        auto& fsr = presenter->GetFsrSettingsRef();
+        fsr.enable = live.fsr.load() != 0;
+        fsr.use_rcas = live.rcas.load() != 0;
+        fsr.rcas_attenuation = static_cast<float>(live.rcas_attenuation.load() / 1000.0f);
+    }
+    EmulatorSettings.SetShowFpsCounter(live.show_fps.load() != 0);
+    Overlay::SetSimpleFps(live.show_fps.load() != 0);
+    EmulatorSettings.SetTrophyPopupDisabled(live.trophy_popup.load() == 0);
+    EmulatorSettings.SetTrophyNotificationSide(trophy_sides[std::min(live.trophy_side.load(), 3u)]);
+    EmulatorSettings.SetTrophyNotificationDuration(static_cast<double>(live.trophy_seconds.load()));
+}
+
+// Ends the process on the core's word, and applies the options changed meanwhile
 void WatchQuit() {
+    std::uint32_t serial = 0;
     while (!shared->quit.load(std::memory_order_acquire)) {
+        const std::uint32_t now = shared->options_serial.load(std::memory_order_acquire);
+        if (now != serial) {
+            serial = now;
+            ApplyLiveOptions();
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     std::quick_exit(0);
@@ -445,7 +481,6 @@ void ApplyCoreOptions() {
     EmulatorSettings.SetPipelineCacheEnabled(options.shader_cache != 0);
     EmulatorSettings.SetCopyGpuBuffers(options.copy_gpu_buffers != 0);
     EmulatorSettings.SetTrophyPopupDisabled(options.trophy_popup == 0);
-    static constexpr const char* trophy_sides[] = {"left", "right", "top", "bottom"};
     EmulatorSettings.SetTrophyNotificationSide(trophy_sides[std::min(options.trophy_side, 3u)]);
     EmulatorSettings.SetTrophyNotificationDuration(static_cast<double>(options.trophy_seconds));
     EmulatorSettings.SetLogEnable(options.log_enable != 0);

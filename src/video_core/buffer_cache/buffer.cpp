@@ -105,8 +105,12 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                    vk::to_string(vk::Result{result}));
         buffer = vk::Buffer{unsafe_buffer};
     } else {
-        buffer_ci.flags |=
-            vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
+        // The libretro core's Buffer sets the flags itself where the device has no sparse
+        // residency
+        if (!(buffer_ci.flags & vk::BufferCreateFlagBits::eSparseBinding)) {
+            buffer_ci.flags |= vk::BufferCreateFlagBits::eSparseBinding |
+                               vk::BufferCreateFlagBits::eSparseResidency;
+        }
         buffer = Vulkan::Check(device.createBuffer(buffer_ci));
     }
 
@@ -130,6 +134,11 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         .usage = AllFlags,
         .sharingMode = vk::SharingMode::eExclusive,
     };
+#ifdef LIBRETRO
+    if (mem_type == MemoryType::Sparse && !instance.IsSparseResidencyBufferSupported()) {
+        buffer_ci.flags |= vk::BufferCreateFlagBits::eSparseBinding;
+    }
+#endif
     VmaAllocationInfo alloc_info{};
     buffer.Create(buffer_ci, mem_type, &alloc_info);
 

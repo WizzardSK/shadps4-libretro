@@ -15,7 +15,9 @@ Builds for Windows and Linux (x86_64) are on the [Releases](https://github.com/W
 
 Put the core into RetroArch's `cores` folder and `shadps4_libretro.info` into its `info` folder.
 
-There are no other builds, and there will not be: the emulator runs the game's code directly on the host CPU and has no recompiler, so it needs a 64-bit x86 CPU, with AVX2. A native ARM frontend cannot load this core.
+The emulator runs the game's code directly on the host CPU and has no recompiler, so it needs a 64-bit x86 CPU, with AVX2.
+
+- **Linux on ARM (aarch64), experimental:** the core for an ARM frontend runs the emulator as an x86-64 process through [box64](https://github.com/ptitSeb/box64), which translates it. The core is one file, `shadps4_libretro.so` in `cores`: it carries box64 and the x86-64 build of the emulator, and writes them into the system directory, under `shadPS4/x86_64/`, at its first start and after an update. The x86-64 build links its C++ runtime in, so box64 needs no x86-64 libraries besides. The box64 is built with its own addresses moved out of the range the emulator maps for the console (`.github/workflows/libretro.yml` has the three changes); a stock box64 does not work. It needs glibc, a GPU with Vulkan 1.3 and a 48-bit address space, and it is slow: the game's code is translated. Not on Android.
 
 ## Video
 
@@ -60,13 +62,13 @@ RetroArch's ports 1 to 4 are the console's controllers, as many as the core opti
 
 ## Core options
 
-- **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, Controllers, Show Splash Screen
+- **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, Controllers, Show Splash Screen, Exact CPU Flags (ARM only)
 - **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, GPU Frame Hand-over, Shader Cache, Show FPS Counter
 - **Audio:** Volume
 - **Trophies:** Trophy Notifications, Trophy Notification Position, Trophy Notification Duration
 - **Logging:** Logging, Separate Log Files, Log Sync
 
-They are the settings of standalone shadPS4's settings dialog that apply to a core, with its defaults, and take effect when the next game is started. The one default that differs is Copy GPU Buffers, on in the core: its picture reaches RetroArch a frame or two late, which makes the fault that setting gets around a regular one. Settings without a core option are in the emulator's config files under `system/shadPS4/`; a per-game setting there wins over the core option. The option texts are translated through libretro's [Crowdin project](https://crowdin.com/project/libretro).
+They are the settings of standalone shadPS4's settings dialog that apply to a core, with its defaults. Volume, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, Show FPS Counter and the three trophy options take effect at once, while the game runs; the others when the next game is started, or after Reset. The one default that differs is Copy GPU Buffers, on in the core: its picture reaches RetroArch a frame or two late, which makes the fault that setting gets around a regular one. Settings without a core option are in the emulator's config files under `system/shadPS4/`; a per-game setting there wins over the core option. The option texts are translated through libretro's [Crowdin project](https://crowdin.com/project/libretro).
 
 There are no save states: the emulator has none.
 

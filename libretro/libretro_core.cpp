@@ -409,6 +409,116 @@ int LauncherDescriptor() {
     return read_only;
 }
 
+#if defined(__aarch64__)
+#ifdef LIBRETRO_X86_64_PARTS
+// box64 and the x86-64 build of the core, carried in this one (CMakeLists.txt)
+extern "C" const unsigned char g_part_box64[], g_part_box64_end[];
+extern "C" const unsigned char g_part_shadps4_libretro_host[], g_part_shadps4_libretro_host_end[];
+extern "C" const unsigned char g_part_shadps4_libretro_so[], g_part_shadps4_libretro_so_end[];
+#endif
+
+// Writes what the core carries into dir, unless the files there are from this very build,
+// as the "build" file there says. Each is written beside its place and moved into it.
+bool WriteParts(const std::string& dir) {
+#ifdef LIBRETRO_X86_64_PARTS
+    const std::string stamp = dir + "build";
+    if (FILE* file = std::fopen(stamp.c_str(), "rb")) {
+        char written[64] = {};
+        const size_t length = std::fread(written, 1, sizeof(written) - 1, file);
+        std::fclose(file);
+        if (std::string(written, length) == Common::g_scm_rev) {
+            return true;
+        }
+    }
+    mkdir(dir.c_str(), 0755);
+    static const struct {
+        const char* name;
+        const unsigned char* begin;
+        const unsigned char* end;
+    } parts[] = {
+        {"box64", g_part_box64, g_part_box64_end},
+        {"shadps4_libretro_host", g_part_shadps4_libretro_host, g_part_shadps4_libretro_host_end},
+        {"shadps4_libretro.so", g_part_shadps4_libretro_so, g_part_shadps4_libretro_so_end},
+    };
+    for (const auto& part : parts) {
+        const std::string path = dir + part.name;
+        const std::string temporary = path + ".new";
+        FILE* file = std::fopen(temporary.c_str(), "wb");
+        const size_t size = static_cast<size_t>(part.end - part.begin);
+        const bool written = file && std::fwrite(part.begin, 1, size, file) == size;
+        if (file && std::fclose(file) != 0) {
+            Log(RETRO_LOG_ERROR, "%s could not be written: %s", temporary.c_str(),
+                std::strerror(errno));
+            return false;
+        }
+        if (!written || chmod(temporary.c_str(), 0755) != 0 ||
+            std::rename(temporary.c_str(), path.c_str()) != 0) {
+            Log(RETRO_LOG_ERROR, "%s could not be written: %s", path.c_str(), std::strerror(errno));
+            std::remove(temporary.c_str());
+            return false;
+        }
+    }
+    FILE* file = std::fopen(stamp.c_str(), "wb");
+    if (!file || std::fputs(Common::g_scm_rev, file) < 0 || std::fclose(file) != 0) {
+        Log(RETRO_LOG_ERROR, "%s could not be written", stamp.c_str());
+        return false;
+    }
+    Log(RETRO_LOG_INFO, "box64 and the x86-64 emulator written to %s", dir.c_str());
+    return true;
+#else
+    Log(RETRO_LOG_ERROR, "This aarch64 build carries no x86-64 emulator: it was built "
+                         "without LIBRETRO_X86_64_PARTS");
+    return false;
+#endif
+}
+
+// On an ARM machine the emulator cannot run in a process of this core's own kind: it runs the
+// game's x86-64 code on the CPU. Its process is the x86-64 build of the core instead, started
+// through box64, which translates it; the two halves trade through the same shared memory.
+// The core carries both and writes them into the frontend's system directory, in
+// shadPS4/x86_64/, as an executable has to be a file there to be started.
+bool StartEmulator(const std::string& argument) {
+    const std::string dir = SystemDirectory() + "/x86_64/";
+    if (!WriteParts(dir)) {
+        return false;
+    }
+    std::string box64 = dir + "box64";
+    std::string launcher = dir + "shadps4_libretro_host";
+    std::string module = dir + "shadps4_libretro.so";
+
+    // The frontend's environment. With Exact CPU Flags box64 computes the flags exactly
+    // (SAFEFLAGS=2): with its faster default Sonic Mania's music, which the game decodes
+    // itself, stayed silent while its sound effects played. Costs some speed.
+    std::vector<std::string> variables;
+    for (char** variable = environ; variable && *variable; ++variable) {
+        if (std::strncmp(*variable, "BOX64_DYNAREC_SAFEFLAGS=", 24) != 0) {
+            variables.emplace_back(*variable);
+        }
+    }
+    if (OptionValue("shadps4_exact_flags", "enabled") == "enabled") {
+        variables.emplace_back("BOX64_DYNAREC_SAFEFLAGS=2");
+    }
+    std::vector<char*> environment;
+    for (std::string& variable : variables) {
+        environment.push_back(variable.data());
+    }
+    environment.push_back(nullptr);
+
+    std::string shared_argument = argument;
+    char* const arguments[] = {box64.data(), launcher.data(), module.data(),
+                               shared_argument.data(), nullptr};
+    pid_t pid = -1;
+    const int result =
+        posix_spawn(&pid, box64.c_str(), nullptr, nullptr, arguments, environment.data());
+    if (result != 0) {
+        Log(RETRO_LOG_ERROR, "box64 could not be started: %s", std::strerror(result));
+        return false;
+    }
+    Log(RETRO_LOG_INFO, "The emulator runs as an x86-64 process through %s", box64.c_str());
+    emulator_pid = pid;
+    return true;
+}
+#else
 bool StartEmulator(const std::string& argument) {
     const std::string module = ModulePath();
     if (module.empty()) {
@@ -438,6 +548,7 @@ bool StartEmulator(const std::string& argument) {
     emulator_pid = pid;
     return true;
 }
+#endif
 
 // Whether the emulator's process has ended, with what, and whether it was killed rather than
 // ended by itself: a process that ends by itself leaves the status it exited with, one that is
@@ -877,6 +988,24 @@ RETRO_API void retro_run(void) {
 
     if (input_poll_cb) {
         input_poll_cb();
+    }
+
+    // An option changed: those that take effect while the game runs go to the emulator
+    bool options_updated = false;
+    if (shared && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &options_updated) &&
+        options_updated) {
+        Libretro::SharedOptions options{};
+        ReadCoreOptions(options);
+        auto& live = shared->live;
+        live.fsr.store(options.fsr);
+        live.rcas.store(options.rcas);
+        live.rcas_attenuation.store(options.rcas_attenuation);
+        live.show_fps.store(options.show_fps);
+        live.volume.store(options.volume);
+        live.trophy_popup.store(options.trophy_popup);
+        live.trophy_side.store(options.trophy_side);
+        live.trophy_seconds.store(options.trophy_seconds);
+        shared->options_serial.fetch_add(1, std::memory_order_release);
     }
 
     if (shared) {

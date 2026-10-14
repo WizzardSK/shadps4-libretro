@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Platforms to build, comma separated (linux, windows)"
+        description: "Platforms to build, comma separated (linux, windows, arm64)"
         default: "linux,windows"
 
 concurrency:
@@ -20,7 +20,7 @@ env:
 jobs:
   linux:
     name: Linux x86_64
-    if: contains(inputs.platforms, 'linux')
+    if: contains(inputs.platforms, 'linux') || contains(inputs.platforms, 'arm64')
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v6
@@ -54,10 +54,137 @@ jobs:
         cp libretro/shadps4_libretro.info out/
         ls -la out
         nm -D --defined-only out/shadps4_libretro.so | grep -c ' retro_'
+        # What the aarch64 core carries: this build and its launcher, which it starts
+        # through box64, without their debugging information
+        mkdir parts
+        cp out/shadps4_libretro.so parts/
+        cp "$(find build -name 'shadps4_libretro_host' -type f | head -1)" parts/
+        strip --strip-unneeded parts/shadps4_libretro.so parts/shadps4_libretro_host
+        readelf -d parts/shadps4_libretro.so | grep NEEDED
+        ls -la parts
 
     - uses: actions/upload-artifact@v7
       with:
         name: shadps4_libretro-linux-x86_64
+        path: out/
+
+    - uses: actions/upload-artifact@v7
+      if: contains(inputs.platforms, 'arm64')
+      with:
+        name: x86_64-parts
+        path: parts/
+
+  # The aarch64 core, carrying box64 and the x86-64 build of the emulator
+  linux-arm64:
+    name: Linux aarch64
+    if: contains(inputs.platforms, 'arm64')
+    needs: [linux, box64]
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: x86_64-parts
+        path: parts
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: box64-linux-aarch64
+        path: parts
+
+    - name: Add LLVM repository
+      run: |
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt install -y libgles2-mesa-dev clang-19 mold build-essential libasound2-dev libpulse-dev libopenal-dev libudev-dev
+
+    - name: Cache CMake Build
+      uses: hendrikmuhs/ccache-action@v1.2.21
+      with:
+        append-timestamp: false
+        key: libretro-linux-arm64-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+
+    - name: Configure CMake
+      run: cmake --fresh -B ${{github.workspace}}/build -DENABLE_LIBRETRO=ON -DENABLE_DISCORD_RPC=OFF -DENABLE_UPDATER=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_MODULE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLIBRETRO_X86_64_PARTS=${{github.workspace}}/parts
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel $(nproc)
+
+    - name: Collect
+      run: |
+        mkdir out
+        cp "$(find build -name 'shadps4_libretro.so' | head -1)" out/
+        cp libretro/shadps4_libretro.info out/
+        strip --strip-unneeded out/shadps4_libretro.so
+        ls -la out
+        nm -D --defined-only out/shadps4_libretro.so | grep -c ' retro_'
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: shadps4_libretro-linux-aarch64
+        path: out/
+
+  # box64, which the aarch64 core starts the x86-64 emulator's process through.
+  box64:
+    name: box64 aarch64
+    if: contains(inputs.platforms, 'box64') || contains(inputs.platforms, 'arm64')
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - name: Fetch box64
+      # main, not v0.4.4: the release lacks __cxa_at_quick_exit, which the
+      # emulator calls while it starts
+      run: |
+        git init box64 && cd box64
+        git remote add origin https://github.com/ptitSeb/box64.git
+        git fetch --depth 1 origin 4437c9b8b1307409261500915ada9012aa04def8
+        git checkout FETCH_HEAD
+
+    # The emulator maps the whole PS4 address range, 4 MB to 85 TB, at fixed
+    # addresses. box64 puts itself, the program it runs and its translated
+    # code inside that range by default; they are moved above it.
+    - name: Keep box64 out of the PS4 address range
+      working-directory: box64
+      run: |
+        sed -i 's|#define HIGH   (void\*)0x60000000|#define HIGH   (void*)0x680000000000LL|' src/custommem.c
+        sed -i 's|void\* mainaddr = (void\*)0x100000000LL;|void* mainaddr = (void*)0x600000000000LL;|' src/custommem.c
+        sed -i 's|InternalMmap(box64_isAddressSpace32?NULL:(void\*)0x100000000ULL, size|InternalMmap(box64_isAddressSpace32?NULL:(void*)0x700000000000ULL, size|' src/custommem.c
+        git diff --stat
+        test "$(git diff | grep -c '^+[^+]')" = 3
+
+    - uses: actions/checkout@v6
+      with:
+        path: core
+
+    # Which faults are writes: box64 told that by decoding the x86 instruction
+    # at RIP, which says "read" for a fault in a wrapped native function (a
+    # memcpy) or in an opcode it does not decode. The emulator then leaves the
+    # page protected and the same write faulted forever: Horizon Chase Turbo
+    # stopped while loading. The patch takes ARM64's own exception syndrome.
+    - name: Write faults from the exception syndrome
+      working-directory: box64
+      run: git apply --verbose ../core/.ci/box64-write-fault.patch
+
+    - name: Build
+      run: |
+        cmake -S box64 -B box64/build -DARM_DYNAREC=ON -DNOLOADADDR=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        cmake --build box64/build --parallel $(nproc)
+
+    - name: Collect
+      run: |
+        mkdir out
+        cp box64/build/box64 out/
+        strip --strip-unneeded out/box64
+        ls -la out
+        out/box64 --version
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: box64-linux-aarch64
         path: out/
 
   windows:

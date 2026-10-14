@@ -1,0 +1,47 @@
+diff --git a/src/libtools/signals.c b/src/libtools/signals.c
+index 0575a8b..f883688 100644
+--- a/src/libtools/signals.c
++++ b/src/libtools/signals.c
+@@ -18,6 +18,31 @@
+ #endif
+ 
+ #include "x64_signals.h"
++
++#if defined(ARM64) && defined(DYNAREC)
++#include <asm/sigcontext.h>
++// Whether the native fault was a write, from the exception syndrome the kernel
++// keeps in the signal frame: the x86 instruction at RIP does not tell when the
++// fault was in a wrapped native function (a memcpy) or in an opcode
++// decode_opcode does not know. -1 when there is no syndrome.
++static int native_write_fault(ucontext_t* p)
++{
++    if(!p) return -1;
++    struct _aarch64_ctx* ctx = (struct _aarch64_ctx*)p->uc_mcontext.__reserved;
++    uintptr_t end = (uintptr_t)p->uc_mcontext.__reserved + sizeof(p->uc_mcontext.__reserved);
++    while((uintptr_t)ctx + sizeof(*ctx) <= end && ctx->magic && ctx->size) {
++        if(ctx->magic==ESR_MAGIC) {
++            uint64_t esr = ((struct esr_context*)ctx)->esr;
++            uint32_t ec = (esr>>26)&0x3f;
++            if(ec==0x24 || ec==0x25)    // data abort, from a lower EL or this one
++                return (esr>>6)&1;      // WnR
++            return -1;
++        }
++        ctx = (struct _aarch64_ctx*)((uintptr_t)ctx + ctx->size);
++    }
++    return -1;
++}
++#endif
+ #include "os.h"
+ #include "backtrace.h"
+ #include "box64context.h"
+@@ -513,6 +538,10 @@ int my_sigactionhandler_oldcode_64(x64emu_t* emu, int32_t sig, int simple, sigin
+             sigcontext->uc_mcontext.gregs[X64_ERR] = 4|((sysmapped && !(real_prot&PROT_READ))?0:1);
+             if(write_opcode(sigcontext->uc_mcontext.gregs[X64_RIP], (uintptr_t)pc, (R_CS==0x23)))
+                 sigcontext->uc_mcontext.gregs[X64_ERR] |= 2;
++#if defined(ARM64) && defined(DYNAREC)
++            else if(native_write_fault(p)==1)
++                sigcontext->uc_mcontext.gregs[X64_ERR] |= 2;
++#endif
+         }
+         if(info->si_code == SEGV_ACCERR && old_code)
+             *old_code = -1;

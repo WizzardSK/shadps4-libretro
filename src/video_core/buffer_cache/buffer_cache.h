@@ -4,6 +4,7 @@
 #pragma once
 
 #include <deque>
+#include <vector>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
@@ -36,9 +37,11 @@ class PageManager;
 
 class BufferCache {
     static constexpr u64 ADDRESS_SPACE_BITS = 40;
-    static constexpr u64 ARENA_PAGE_BITS = 32;
-    static constexpr u64 ARENA_PAGE_SIZE = u64{1} << ARENA_PAGE_BITS;
-    static constexpr u64 NUM_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - ARENA_PAGE_BITS);
+    static constexpr u64 DEFAULT_ARENA_PAGE_BITS = 32;
+#ifdef LIBRETRO
+    // The smallest an arena page gets on a device with little sparse address space
+    static constexpr u64 MIN_ARENA_PAGE_BITS = 26;
+#endif
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
     static constexpr u64 STREAM_THRESHOLD = 16_KB;
 
@@ -148,7 +151,12 @@ private:
     std::unique_ptr<Buffer> bda_pagetable_buffer;
     bool fault_process_pending{};
 
-    std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
+    // The size of an arena page, in bits. A constant upstream; the libretro core picks it
+    // for the device (see the constructor).
+    u64 ARENA_PAGE_BITS{DEFAULT_ARENA_PAGE_BITS};
+    u64 ARENA_PAGE_SIZE{u64{1} << DEFAULT_ARENA_PAGE_BITS};
+    u64 NUM_ARENA_PAGES{u64{1} << (ADDRESS_SPACE_BITS - DEFAULT_ARENA_PAGE_BITS)};
+    std::vector<const Buffer*> address_space;
     std::deque<Buffer> arenas;
     std::vector<ArenaBinds> pending_binds;
     Vulkan::Semaphore memory_semaphore;

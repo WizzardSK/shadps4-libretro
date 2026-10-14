@@ -254,6 +254,8 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         NULL,
         "video",
         {
+            { "640x360",   "640x360" },
+            { "960x540",   "960x540" },
             { "1280x720",  "1280x720 (720p)" },
             { "1920x1080", "1920x1080 (1080p)" },
             { "2560x1440", "2560x1440 (1440p)" },
@@ -392,6 +394,24 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         },
         "enabled"
     },
+#if defined(__aarch64__)
+    {
+        // On by default: without it Sonic Mania's music, which the game decodes itself, was
+        // silent while its sound effects played. Only the ARM build translates the emulator.
+        "shadps4_exact_flags",
+        "Exact CPU Flags",
+        NULL,
+        "On ARM the emulator's x86-64 code is translated as it runs. With this on, the translation works out the CPU's flags exactly, which some games need: without it Sonic Mania's music stays silent. Off is faster. Takes effect when the game starts.",
+        NULL,
+        "system",
+        {
+            { "disabled", NULL },
+            { "enabled", NULL },
+            { NULL, NULL },
+        },
+        "enabled"
+    },
+#endif
     {
         // Off by default: when it cannot be done there is no picture at all, as a frontend
         // that was asked for a Vulkan context takes no other kind of frame.
