@@ -49,7 +49,7 @@ This repository builds the libretro core and nothing else. The standalone's part
 
 ## Testing
 
-- The emulator runs the game's code on the host CPU: x86-64 only. A change cannot be tried on an ARM machine; say so instead of claiming it works.
+- The emulator runs the game's code on an x86-64 CPU. On ARM (aarch64) the core runs the x86-64 emulator through box64, which it carries; a change can be tried there, but say which of the two it was tried on.
 - The core logs, at start, its version and the commit it was built from. Ask testers for the frontend's log and the emulator's own (`system/shadPS4/log/shadps4.log`), and check which commit a log came from before drawing conclusions from it.
 - Compare with standalone shadPS4 at the same upstream version before calling something a core bug; when standalone fails the same way, it is upstream's.
 - Cores are built by CI, not locally.
