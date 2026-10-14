@@ -4,8 +4,9 @@
 // The picture handed to the frontend on the GPU: the frontend's side. See gpu_frames.h.
 //
 // The emulator draws each frame into one of a few images of its own (vk_swapchain.cpp). With
-// this it makes them of memory that can be exported, and sends a descriptor of each image's
-// memory over a socket, once (host.cpp). Here the same images are made in the frontend's
+// this it makes them of memory that can be exported, and hands over each image's memory once
+// (host.cpp): on Linux a descriptor over a socket, on Windows an NT handle in the shared memory,
+// which is duplicated from the emulator's process into this one. Here the same images are made in the frontend's
 // Vulkan device, on that memory, and a finished frame is shown by telling the frontend which
 // image to draw. Nothing is copied.
 //
@@ -22,7 +23,7 @@
 
 #include "gpu_frames.h"
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
 
 #include <cerrno>
 #include <cstdarg>
@@ -30,8 +31,13 @@
 #include <cstring>
 #include <vector>
 
+#if defined(_WIN32)
+#define VK_USE_PLATFORM_WIN32_KHR
+#include <windows.h>
+#else
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include "libretro_vulkan.h"
 #include "shared_state.h"
@@ -39,6 +45,27 @@
 namespace Libretro::GpuFrames {
 
 namespace {
+
+// An image's memory as this process holds it.
+#if defined(_WIN32)
+using MemoryHandle = HANDLE;
+constexpr MemoryHandle NO_HANDLE = nullptr;
+constexpr VkExternalMemoryHandleTypeFlagBits HANDLE_TYPE =
+    VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+constexpr const char* MEMORY_EXTENSION = VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
+void CloseMemoryHandle(MemoryHandle handle) {
+    CloseHandle(handle);
+}
+#else
+using MemoryHandle = int;
+constexpr MemoryHandle NO_HANDLE = -1;
+constexpr VkExternalMemoryHandleTypeFlagBits HANDLE_TYPE =
+    VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+constexpr const char* MEMORY_EXTENSION = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
+void CloseMemoryHandle(MemoryHandle handle) {
+    close(handle);
+}
+#endif
 
 retro_environment_t environment_cb = nullptr;
 retro_log_printf_t log_cb = nullptr;
@@ -52,7 +79,9 @@ bool memory_import_enabled = false;
 // frontend makes one whenever its video driver is started again.
 bool have_message = false;
 GpuImagesMessage message{};
-int memory_fds[FRAME_IMAGES] = {-1, -1, -1, -1, -1};
+static_assert(FRAME_IMAGES == 5);
+MemoryHandle memory_handles[FRAME_IMAGES] = {NO_HANDLE, NO_HANDLE, NO_HANDLE, NO_HANDLE,
+                                             NO_HANDLE};
 
 struct Imported {
     VkImage image = VK_NULL_HANDLE;
@@ -96,11 +125,11 @@ void Fail(const char* format, ...) {
     Log(RETRO_LOG_ERROR, "The picture cannot be handed over on the GPU: %s", failure_text);
 }
 
-void CloseDescriptors() {
-    for (int& fd : memory_fds) {
-        if (fd >= 0) {
-            close(fd);
-            fd = -1;
+void CloseMemoryHandles() {
+    for (MemoryHandle& handle : memory_handles) {
+        if (handle != NO_HANDLE) {
+            CloseMemoryHandle(handle);
+            handle = NO_HANDLE;
         }
     }
 }
@@ -185,7 +214,7 @@ void Import() {
         return;
     }
     if (!memory_import_enabled) {
-        Fail("the frontend's Vulkan device was made without VK_KHR_external_memory_fd");
+        Fail("the frontend's Vulkan device was made without %s", MEMORY_EXTENSION);
         return;
     }
     if (!SameGpu()) {
@@ -198,7 +227,7 @@ void Import() {
 
         VkExternalMemoryImageCreateInfo external{};
         external.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
-        external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+        external.handleTypes = HANDLE_TYPE;
         // The same image as the emulator's (vk_swapchain.cpp, CreateOffscreenImages).
         VkImageCreateInfo image_info{};
         image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -221,9 +250,16 @@ void Import() {
             return;
         }
 
+#if defined(_WIN32)
+        // An NT handle stays this process's after the import: it is kept for the next device.
+        VkImportMemoryWin32HandleInfoKHR import{};
+        import.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
+        import.handleType = HANDLE_TYPE;
+        import.handle = memory_handles[i];
+#else
         // A descriptor that is imported belongs to the device from then on, so it is a copy
         // that goes in: the original is kept for the next device.
-        const int fd = dup(memory_fds[i]);
+        const int fd = dup(memory_handles[i]);
         if (fd < 0) {
             Fail("a descriptor of image memory could not be copied (%s)", std::strerror(errno));
             DestroyImported();
@@ -231,8 +267,9 @@ void Import() {
         }
         VkImportMemoryFdInfoKHR import{};
         import.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
-        import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+        import.handleType = HANDLE_TYPE;
         import.fd = fd;
+#endif
         VkMemoryAllocateInfo allocate{};
         allocate.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocate.pNext = &import;
@@ -240,7 +277,9 @@ void Import() {
         allocate.memoryTypeIndex = message.memory_type;
         result = device_calls.AllocateMemory(vulkan->device, &allocate, nullptr, &entry.memory);
         if (result != VK_SUCCESS) {
+#if !defined(_WIN32)
             close(fd);
+#endif
             Fail("the memory of image %u could not be imported (%d)", i, result);
             DestroyImported();
             return;
@@ -278,14 +317,15 @@ void Import() {
 
 void ContextReset() {
     vulkan = nullptr;
-    const retro_hw_render_interface_vulkan* interface = nullptr;
-    if (!environment_cb(RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE, &interface) || !interface ||
-        interface->interface_type != RETRO_HW_RENDER_INTERFACE_VULKAN) {
+    const retro_hw_render_interface_vulkan* frontend_interface = nullptr;
+    if (!environment_cb(RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE, &frontend_interface) ||
+        !frontend_interface ||
+        frontend_interface->interface_type != RETRO_HW_RENDER_INTERFACE_VULKAN) {
         Fail("the frontend gave no Vulkan interface");
         TellFrontendGpu();
         return;
     }
-    vulkan = interface;
+    vulkan = frontend_interface;
     const auto load = [](const char* name) {
         return vulkan->get_device_proc_addr(vulkan->device, name);
     };
@@ -430,7 +470,7 @@ bool CreateDevice2(retro_vulkan_context* context, VkInstance instance, VkPhysica
     }
     // Without the extension the device is still made: Failure() tells the user why the
     // picture stays black, which a load that fails here would not.
-    const char* extensions[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME};
+    const char* extensions[] = {MEMORY_EXTENSION};
     memory_import_enabled = HasExtension(get_instance_proc_addr, instance, gpu, extensions[0]);
 
     const float priority = 1.0f;
@@ -462,10 +502,10 @@ bool CreateDevice(retro_vulkan_context* context, VkInstance instance, VkPhysical
     std::vector<const char*> extensions(required_device_extensions,
                                         required_device_extensions +
                                             num_required_device_extensions);
-    memory_import_enabled = HasExtension(get_instance_proc_addr, instance, gpu,
-                                         VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+    memory_import_enabled =
+        HasExtension(get_instance_proc_addr, instance, gpu, MEMORY_EXTENSION);
     if (memory_import_enabled) {
-        extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+        extensions.push_back(MEMORY_EXTENSION);
     }
 
     const float priority = 1.0f;
@@ -539,7 +579,38 @@ void SetShared(SharedState* shared) {
     shared_state = shared;
 }
 
-void Receive(int socket) {
+#if defined(_WIN32)
+void Receive(int, void* emulator_process) {
+    if (!shared_state || have_message || shared_state->gpu_images_ready.load() == 0) {
+        return;
+    }
+    const GpuImagesMessage received = shared_state->gpu_images;
+    if (received.magic != GPU_IMAGES_MAGIC || received.count == 0 ||
+        received.count > FRAME_IMAGES) {
+        have_message = true;
+        Fail("what the emulator wrote about its images cannot be read");
+        return;
+    }
+    // The handles are the emulator's: duplicated into this process, they are the core's.
+    for (std::uint32_t i = 0; i < received.count; ++i) {
+        const HANDLE theirs = reinterpret_cast<HANDLE>(
+            static_cast<std::uintptr_t>(shared_state->gpu_image_handles[i]));
+        if (!DuplicateHandle(static_cast<HANDLE>(emulator_process), theirs, GetCurrentProcess(),
+                             &memory_handles[i], 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            memory_handles[i] = NO_HANDLE;
+            CloseMemoryHandles();
+            have_message = true;
+            Fail("the emulator's image %u could not be taken over (error %lu)", i,
+                 GetLastError());
+            return;
+        }
+    }
+    message = received;
+    have_message = true;
+    Import();
+}
+#else
+void Receive(int socket, void*) {
     if (socket < 0 || have_message) {
         return;
     }
@@ -585,11 +656,12 @@ void Receive(int socket) {
     }
     message = received;
     for (std::uint32_t i = 0; i < fd_count; ++i) {
-        memory_fds[i] = fds[i];
+        memory_handles[i] = fds[i];
     }
     have_message = true;
     Import();
 }
+#endif
 
 void Show(retro_video_refresh_t video, std::uint32_t slot, bool have_frame, unsigned width,
           unsigned height) {
@@ -611,7 +683,7 @@ const char* Failure() {
 
 void Close() {
     DestroyImported();
-    CloseDescriptors();
+    CloseMemoryHandles();
     have_message = false;
     message = {};
     failure = nullptr;
@@ -621,14 +693,14 @@ void Close() {
 
 #else
 
-// Elsewhere there is no hand-over on the GPU yet: the picture goes through system memory.
+// Elsewhere there is no hand-over on the GPU: the picture goes through system memory.
 namespace Libretro::GpuFrames {
 
 bool Request(retro_environment_t, retro_log_printf_t) {
     return false;
 }
 void SetShared(SharedState*) {}
-void Receive(int) {}
+void Receive(int, void*) {}
 void Show(retro_video_refresh_t, std::uint32_t, bool, unsigned, unsigned) {}
 const char* Failure() {
     return nullptr;

@@ -288,6 +288,8 @@ void PushFrame(const void* pixels, std::uint32_t width, std::uint32_t height) {
 bool GpuFramesWanted() {
 #if defined(__linux__)
     return shared && shared->options.gpu_frames != 0 && shared->options.gpu_socket >= 0;
+#elif defined(_WIN32)
+    return shared && shared->options.gpu_frames != 0;
 #else
     return false;
 #endif
@@ -314,11 +316,11 @@ std::uint32_t GpuFrameImages() {
     return FRAME_IMAGES;
 }
 
-bool ShareImages(const int* memory_descriptors, std::uint32_t count, std::uint32_t width,
+bool ShareImages(const std::uint64_t* memory_handles, std::uint32_t count, std::uint32_t width,
                  std::uint32_t height, std::uint32_t format, std::uint32_t usage,
                  std::uint32_t memory_type, const std::uint64_t* allocation_sizes,
                  const std::uint8_t* device_uuid, const std::uint8_t* driver_uuid) {
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     if (!GpuFramesWanted() || count == 0 || count > FRAME_IMAGES || gpu_frames_active) {
         return false;
     }
@@ -334,6 +336,16 @@ bool ShareImages(const int* memory_descriptors, std::uint32_t count, std::uint32
     std::memcpy(message.device_uuid, device_uuid, sizeof(message.device_uuid));
     std::memcpy(message.driver_uuid, driver_uuid, sizeof(message.driver_uuid));
 
+#if defined(_WIN32)
+    // In the shared memory; the core duplicates the handles into its own process.
+    shared->gpu_images = message;
+    std::memcpy(shared->gpu_image_handles, memory_handles, count * sizeof(std::uint64_t));
+    shared->gpu_images_ready.store(1);
+#else
+    int descriptors[FRAME_IMAGES];
+    for (std::uint32_t i = 0; i < count; ++i) {
+        descriptors[i] = static_cast<int>(memory_handles[i]);
+    }
     iovec data{&message, sizeof(message)};
     alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * FRAME_IMAGES)]{};
     msghdr header{};
@@ -345,13 +357,14 @@ bool ShareImages(const int* memory_descriptors, std::uint32_t count, std::uint32
     part->cmsg_level = SOL_SOCKET;
     part->cmsg_type = SCM_RIGHTS;
     part->cmsg_len = CMSG_LEN(sizeof(int) * count);
-    std::memcpy(CMSG_DATA(part), memory_descriptors, sizeof(int) * count);
+    std::memcpy(CMSG_DATA(part), descriptors, sizeof(int) * count);
     if (sendmsg(shared->options.gpu_socket, &header, MSG_NOSIGNAL) !=
         static_cast<ssize_t>(sizeof(message))) {
         LOG_ERROR(Render_Vulkan, "The images could not be sent to the frontend: {}",
                   std::strerror(errno));
         return false;
     }
+#endif
     for (auto& in_flight : image_in_flight) {
         in_flight = false;
     }

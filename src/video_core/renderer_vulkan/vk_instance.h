@@ -320,10 +320,11 @@ public:
     }
 
 #ifdef LIBRETRO
-    /// Whether the device can export an image's memory as a descriptor, which is how the
-    /// libretro core hands the picture to the frontend on the GPU
-    bool IsExternalMemoryFdSupported() const {
-        return external_memory_fd;
+    /// Whether the device can export an image's memory - as a descriptor on Linux, an NT
+    /// handle on Windows - which is how the libretro core hands the picture to the frontend on
+    /// the GPU
+    bool IsExternalMemoryExportSupported() const {
+        return external_memory_export;
     }
 #endif
 
@@ -552,7 +553,7 @@ private:
     bool shader_clock{};
     bool supports_memory_budget{};
 #ifdef LIBRETRO
-    bool external_memory_fd{};
+    bool external_memory_export{};
 #endif
     bool supports_block_texel_view{};
     u64 total_memory_budget{};

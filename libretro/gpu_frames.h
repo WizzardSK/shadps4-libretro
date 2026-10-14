@@ -13,8 +13,8 @@ struct SharedState;
 
 // The picture handed to the frontend on the GPU, in the frontend's process (gpu_frames.cpp):
 // the emulator's finished images are imported into the frontend's Vulkan device and shown from
-// there, in place of being read back into system memory and uploaded again. Linux, and a
-// frontend whose video driver is Vulkan.
+// there, in place of being read back into system memory and uploaded again. Linux and Windows,
+// and a frontend whose video driver is Vulkan.
 namespace Libretro::GpuFrames {
 
 /// Asks the frontend for a Vulkan context, in retro_load_game. False when it gives none: the
@@ -25,8 +25,9 @@ bool Request(retro_environment_t environment, retro_log_printf_t log);
 /// nullptr once that memory is gone.
 void SetShared(SharedState* shared);
 
-/// Takes what the emulator has sent over the socket: the descriptors of its images.
-void Receive(int socket);
+/// Takes what the emulator has handed over about its images: on Linux over the socket, on
+/// Windows in the shared memory, with handles to duplicate from the emulator's process.
+void Receive(int socket, void* emulator_process);
 
 /// Shows the image in a slot, or the last one again when there is none to show yet.
 void Show(retro_video_refresh_t video, std::uint32_t slot, bool have_frame, unsigned width,

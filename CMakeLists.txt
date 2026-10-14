@@ -1345,6 +1345,7 @@ if (ENABLE_LIBRETRO)
         libretro/host.cpp
         libretro/libretro.h
         libretro/libretro_vulkan.h
+        libretro/memory_export.cpp
         libretro/libretro_bridge.h
         libretro/libretro_core.cpp
         libretro/libretro_core_options.h

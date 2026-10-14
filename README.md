@@ -23,7 +23,7 @@ The emulator renders with Vulkan and needs a GPU with Vulkan 1.3. RetroArch's vi
 
 The frames are copied through system memory on their way to RetroArch, which costs speed at high output resolutions.
 
-On Linux the core option GPU Frame Hand-over does away with that: RetroArch draws the emulator's finished image itself, and nothing is copied. It needs RetroArch's `vulkan` video driver; the emulator then uses the GPU RetroArch is on, where there are several. It is off by default, because where it cannot be done there is no picture at all - a message then says why, and the option has to be turned off again.
+The core option GPU Frame Hand-over does away with that: RetroArch draws the emulator's finished image itself, and nothing is copied. It needs RetroArch's `vulkan` video driver; the emulator then uses the GPU RetroArch is on, where there are several. It is off by default, because where it cannot be done there is no picture at all - a message then says why, and the option has to be turned off again.
 
 ## Content
 

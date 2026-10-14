@@ -37,11 +37,21 @@ bool FrontendGpu(std::uint8_t* device_uuid);
 /// How many images the emulator draws its frames into then.
 std::uint32_t GpuFrameImages();
 
-/// The images that stand in for a swapchain, made of exportable memory: a descriptor of each
-/// one's memory, which is sent to the core and then belongs to it. The format and usage are
-/// Vulkan's values. False when they could not be sent; the picture then goes through system
-/// memory, as it does without this.
-bool ShareImages(const int* memory_descriptors, std::uint32_t count, std::uint32_t width,
+/// The handle to an image's memory that the core is sent: a descriptor on Linux, an NT handle
+/// on Windows. The device and memory are Vulkan's handles, and the function the device's
+/// vkGetDeviceProcAddr. False when the memory could not be exported.
+bool ExportImageMemory(void* device, std::uint64_t memory, void* get_device_proc_addr,
+                       std::uint64_t& handle);
+
+/// Lets go of such a handle.
+void CloseImageMemory(std::uint64_t handle);
+
+/// The images that stand in for a swapchain, made of exportable memory: a handle to each one's
+/// memory (ExportImageMemory). On Linux they are sent and can be closed afterwards; on Windows
+/// the core duplicates them later, and they stay open. The format and usage are Vulkan's
+/// values. False when they could not be sent; the picture then goes through system memory, as
+/// it does without this.
+bool ShareImages(const std::uint64_t* memory_handles, std::uint32_t count, std::uint32_t width,
                  std::uint32_t height, std::uint32_t format, std::uint32_t usage,
                  std::uint32_t memory_type, const std::uint64_t* allocation_sizes,
                  const std::uint8_t* device_uuid, const std::uint8_t* driver_uuid);

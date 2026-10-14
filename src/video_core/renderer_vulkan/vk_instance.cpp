@@ -382,7 +382,10 @@ bool Instance::CreateDevice() {
     supports_memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 #if defined(LIBRETRO) && defined(__linux__)
     // The picture handed to the frontend on the GPU (libretro/gpu_frames.h).
-    external_memory_fd = add_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+    external_memory_export = add_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+#elif defined(LIBRETRO) && defined(_WIN32)
+    // The same, by NT handle. Spelled out: its macro comes with Vulkan's Win32 declarations.
+    external_memory_export = add_extension("VK_KHR_external_memory_win32");
 #endif
     shader_clock = add_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
     if (shader_clock) {

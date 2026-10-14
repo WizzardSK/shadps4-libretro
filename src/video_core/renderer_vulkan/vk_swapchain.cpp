@@ -12,9 +12,6 @@
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #ifdef LIBRETRO
 #include "libretro/libretro_bridge.h"
-#if defined(__linux__)
-#include <unistd.h>
-#endif
 #endif
 
 namespace Vulkan {
@@ -372,28 +369,32 @@ void Swapchain::RefreshSemaphores() {
 
 #ifdef LIBRETRO
 bool Swapchain::CreateSharedImages() {
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     // Once only: the images' descriptors are sent to the frontend once, and the picture's size
     // does not change while a game runs.
     if (!Libretro::GpuFramesWanted() || Libretro::GpuFramesActive() ||
-        !instance.IsExternalMemoryFdSupported()) {
+        !instance.IsExternalMemoryExportSupported()) {
         return false;
     }
     const vk::Device device = instance.GetDevice();
     const auto memory_properties = instance.GetPhysicalDevice().getMemoryProperties();
+#if defined(_WIN32)
+    const auto handle_type = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueWin32;
+#else
     const auto handle_type = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+#endif
     // The frontend makes the same images on this memory (libretro/gpu_frames.cpp, Import):
     // what is set here is what it is told.
     const vk::ImageUsageFlags usage =
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc |
         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
 
-    std::vector<int> descriptors;
+    std::vector<u64> handles;
     std::vector<u64> sizes;
     u32 memory_type = std::numeric_limits<u32>::max();
     const auto give_up = [&] {
-        for (const int descriptor : descriptors) {
-            close(descriptor);
+        for (const u64 handle : handles) {
+            Libretro::CloseImageMemory(handle);
         }
         for (const auto& image : images) {
             device.destroyImage(image);
@@ -469,16 +470,16 @@ bool Swapchain::CreateSharedImages() {
             return give_up();
         }
 
-        auto [descriptor_result, descriptor] = device.getMemoryFdKHR(vk::MemoryGetFdInfoKHR{
-            .memory = memory,
-            .handleType = handle_type,
-        });
-        if (descriptor_result != vk::Result::eSuccess) {
-            LOG_WARNING(Render_Vulkan, "The frontend's images could not be exported: {}",
-                        vk::to_string(descriptor_result));
+        u64 handle = 0;
+        if (!Libretro::ExportImageMemory(
+                static_cast<VkDevice>(device),
+                reinterpret_cast<u64>(static_cast<VkDeviceMemory>(memory)),
+                reinterpret_cast<void*>(VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr),
+                handle)) {
+            LOG_WARNING(Render_Vulkan, "The frontend's images could not be exported");
             return give_up();
         }
-        descriptors.push_back(descriptor);
+        handles.push_back(handle);
         sizes.push_back(requirements.size);
     }
 
@@ -486,17 +487,20 @@ bool Swapchain::CreateSharedImages() {
                          .getProperties2<vk::PhysicalDeviceProperties2,
                                          vk::PhysicalDeviceIDProperties>()
                          .get<vk::PhysicalDeviceIDProperties>();
-    if (!Libretro::ShareImages(descriptors.data(), image_count, extent.width, extent.height,
+    if (!Libretro::ShareImages(handles.data(), image_count, extent.width, extent.height,
                                static_cast<u32>(surface_format.format),
                                static_cast<u32>(static_cast<VkImageUsageFlags>(usage)),
                                memory_type, sizes.data(), ids.deviceUUID.data(),
                                ids.driverUUID.data())) {
         return give_up();
     }
-    // Sent: the frontend's process has its own copies of them now.
-    for (const int descriptor : descriptors) {
-        close(descriptor);
+#if !defined(_WIN32)
+    // Sent: the frontend's process has its own copies of them now. On Windows the core
+    // duplicates them from this process later, so they stay open.
+    for (const u64 handle : handles) {
+        Libretro::CloseImageMemory(handle);
     }
+#endif
     return true;
 #else
     return false;

@@ -775,7 +775,14 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     gpu_frames = false;
     gpu_failure_told = false;
     shown_image = 0;
-#ifndef _WIN32
+#ifdef _WIN32
+    // The images come through the shared memory.
+    if (shared->options.gpu_frames != 0 && Libretro::GpuFrames::Request(environ_cb, log_cb)) {
+        gpu_frames = true;
+        Libretro::GpuFrames::SetShared(shared);
+    }
+    shared->options.gpu_frames = gpu_frames ? 1 : 0;
+#else
     if (shared->options.gpu_frames != 0 && Libretro::GpuFrames::Request(environ_cb, log_cb)) {
         gpu_frames = true;
         Libretro::GpuFrames::SetShared(shared);
@@ -789,8 +796,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
             Log(RETRO_LOG_ERROR, "No socket for the emulator's images: %s", std::strerror(errno));
         }
     }
-#endif
     shared->options.gpu_frames = gpu_frames && shared->options.gpu_socket >= 0;
+#endif
     output_width = shared->options.width;
     output_height = shared->options.height;
     for (auto& axes : shared->axes) {
@@ -888,7 +895,11 @@ RETRO_API void retro_run(void) {
         SendInput();
         ApplyRumble();
         if (gpu_frames) {
-            Libretro::GpuFrames::Receive(gpu_socket);
+#ifdef _WIN32
+            Libretro::GpuFrames::Receive(-1, emulator_process);
+#else
+            Libretro::GpuFrames::Receive(gpu_socket, nullptr);
+#endif
             if (const char* failure = Libretro::GpuFrames::Failure();
                 failure && !gpu_failure_told) {
                 gpu_failure_told = true;

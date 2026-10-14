@@ -13,7 +13,7 @@
 namespace Libretro {
 
 inline constexpr std::uint32_t SHARED_MAGIC = 0x34505368; // "hSP4"
-inline constexpr std::uint32_t SHARED_VERSION = 7;
+inline constexpr std::uint32_t SHARED_VERSION = 8;
 
 inline constexpr std::uint32_t MAX_WIDTH = 3840;
 inline constexpr std::uint32_t MAX_HEIGHT = 2160;
@@ -31,9 +31,10 @@ inline constexpr std::uint32_t FRAME_SLOT_NONE = 7;
 inline constexpr std::uint32_t FRAME_SLOT_BITS = 3;
 inline constexpr std::uint32_t FRAME_SLOT_MASK = (1u << FRAME_SLOT_BITS) - 1;
 
-/// What the emulator sends over the socket once its images exist, with one descriptor of an
-/// image's memory for each of them: what the core needs to make the same images in the
-/// frontend's Vulkan device. The formats and flags are Vulkan's values.
+/// What the emulator tells the core once its images exist - over the socket on Linux, with one
+/// descriptor of an image's memory for each of them, and in this memory on Windows, with a
+/// handle for each: what the core needs to make the same images in the frontend's Vulkan
+/// device. The formats and flags are Vulkan's values.
 inline constexpr std::uint32_t GPU_IMAGES_MAGIC = 0x47505368; // "hSPG"
 struct GpuImagesMessage {
     std::uint32_t magic;
@@ -99,8 +100,8 @@ struct SharedOptions {
     std::uint32_t copy_gpu_buffers;
     /// The picture is handed over on the GPU: the frontend gave the core a Vulkan context.
     std::uint32_t gpu_frames;
-    /// The emulator's end of the socket its images' descriptors go over, as a descriptor in
-    /// the emulator's process; meaningful with gpu_frames only.
+    /// Linux: the emulator's end of the socket its images' descriptors go over, as a
+    /// descriptor in the emulator's process; meaningful with gpu_frames only.
     std::int32_t gpu_socket;
     std::uint32_t trophy_popup;
     /// 0 left, 1 right, 2 top, 3 bottom.
@@ -154,6 +155,13 @@ struct SharedState {
     /// frontend_gpu_uuid, or 2 when it could not find out.
     std::atomic<std::uint32_t> frontend_gpu;
     std::uint8_t frontend_gpu_uuid[16];
+
+    /// Windows, with gpu_frames: the emulator's images, as the socket carries them elsewhere.
+    /// gpu_images_ready is set once the rest is written; the handles are the emulator's, and
+    /// the core duplicates them into its own process.
+    std::atomic<std::uint32_t> gpu_images_ready;
+    GpuImagesMessage gpu_images;
+    std::uint64_t gpu_image_handles[FRAME_IMAGES];
 
     /// A ring of interleaved 16-bit stereo, one writer (the emulator) and one reader (the core).
     /// The indices count frames and only grow; a position is index & (AUDIO_RING_FRAMES - 1).
