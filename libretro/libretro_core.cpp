@@ -733,7 +733,21 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info) {
 
 RETRO_API void retro_set_controller_port_device(unsigned, unsigned) {}
 
-RETRO_API void retro_reset(void) {}
+// A reset is an unload and a load: the emulator stops only with its process, so the game
+// starts again in a new one. The game's path is taken from the shared memory before the
+// unload frees it.
+RETRO_API void retro_reset(void) {
+    if (!shared) {
+        return;
+    }
+    const std::string path = shared->eboot_path;
+    retro_unload_game();
+    retro_game_info game{};
+    game.path = path.c_str();
+    if (!retro_load_game(&game)) {
+        Notify("shadPS4: the game could not be started again; see the log");
+    }
+}
 
 RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     if (!game || !game->path || !*game->path) {
