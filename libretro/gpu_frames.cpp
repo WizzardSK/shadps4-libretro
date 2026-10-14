@@ -355,6 +355,9 @@ void ContextReset() {
 void ContextDestroy() {
     DestroyImported();
     vulkan = nullptr;
+    // What the device was made with goes with it. A reset keeps the frontend's device, and the
+    // core is not asked to make it again, so this is not cleared when a game is loaded.
+    memory_import_enabled = false;
 }
 
 // ---- The device: made with the extension that imports memory ----
@@ -538,7 +541,6 @@ bool Request(retro_environment_t environment, retro_log_printf_t log) {
     environment_cb = environment;
     log_cb = log;
     failure = nullptr;
-    memory_import_enabled = false;
 
     unsigned preferred = RETRO_HW_CONTEXT_NONE;
     if (environment(RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER, &preferred) &&
