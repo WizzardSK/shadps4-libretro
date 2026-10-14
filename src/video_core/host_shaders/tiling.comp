@@ -7,6 +7,10 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 
+#ifndef WORD_ACCESS
+#define WORD_ACCESS 0
+#endif
+
 layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(constant_id = 0) const uint NUM_SAMPLES = 1;
@@ -91,6 +95,17 @@ struct MipInfo {
     uint offset;
 };
 
+#if WORD_ACCESS
+// For GPUs without 8- or 16-bit storage buffer access: the buffers as 32-bit words, a texel
+// taken out of its word and put into one with atomics, as neighbouring texels share a word
+layout (set = 0, binding = 0, scalar) buffer InputBuf {
+    uint tiled_data[];
+};
+
+layout (set = 0, binding = 1, scalar) buffer OutputBuf {
+    uint linear_data[];
+};
+#else
 layout (set = 0, binding = 0, scalar) buffer InputBuf {
     BLOCK_TYPE tiled_data[];
 };
@@ -98,6 +113,7 @@ layout (set = 0, binding = 0, scalar) buffer InputBuf {
 layout (set = 0, binding = 1, scalar) buffer OutputBuf {
     BLOCK_TYPE linear_data[];
 };
+#endif
 
 layout (set = 0, binding = 2, scalar) uniform TilingInfo {
     uint bank_swizzle;
@@ -444,9 +460,25 @@ void main() {
     tiled_offset += ComputeSurfaceAddrFromCoordMicroTiled(x, y, slice, pitch, height, MICRO_TILE_THICKNESS, 0);
 #endif
 
+#if WORD_ACCESS
+    const uint mask = (1u << BITS_PER_PIXEL) - 1u;
+    const uint linear_offset = gl_GlobalInvocationID.x * BYTES_PER_PIXEL;
+    if (IS_TILER != 0) {
+        const uint value = (linear_data[linear_offset >> 2] >> ((linear_offset & 3u) * 8u)) & mask;
+        const uint shift = (tiled_offset & 3u) * 8u;
+        atomicAnd(tiled_data[tiled_offset >> 2], ~(mask << shift));
+        atomicOr(tiled_data[tiled_offset >> 2], value << shift);
+    } else {
+        const uint value = (tiled_data[tiled_offset >> 2] >> ((tiled_offset & 3u) * 8u)) & mask;
+        const uint shift = (linear_offset & 3u) * 8u;
+        atomicAnd(linear_data[linear_offset >> 2], ~(mask << shift));
+        atomicOr(linear_data[linear_offset >> 2], value << shift);
+    }
+#else
     if (IS_TILER != 0) {
         tiled_data[tiled_offset / BYTES_PER_PIXEL] = linear_data[gl_GlobalInvocationID.x];
     } else {
         linear_data[gl_GlobalInvocationID.x] = tiled_data[tiled_offset / BYTES_PER_PIXEL];
     }
+#endif
 }

@@ -424,6 +424,9 @@ bool Instance::CreateDevice() {
     };
 
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
+#ifdef LIBRETRO
+    storage_buffer_16bit_access = vk11_features.storageBuffer16BitAccess;
+#endif
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
     vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
     vk::StructureChain device_chain = {

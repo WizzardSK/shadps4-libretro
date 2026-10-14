@@ -109,6 +109,17 @@ public:
         return features.shaderInt16;
     }
 
+#ifdef LIBRETRO
+    /// Whether shaders can read and write 8-bit and 16-bit values in storage buffers. Some
+    /// mobile GPUs cannot (Adreno 618 with Turnip): the tiling shaders take 32-bit words there.
+    bool IsStorageBuffer8BitAccessSupported() const {
+        return vk12_features.storageBuffer8BitAccess;
+    }
+    bool IsStorageBuffer16BitAccessSupported() const {
+        return storage_buffer_16bit_access;
+    }
+#endif
+
     /// Returns true if 8-bit ints are supported in shaders
     bool IsShaderInt8Supported() const {
         return vk12_features.shaderInt8;
@@ -507,6 +518,9 @@ private:
     vk::PhysicalDeviceFeatures features;
     vk::PhysicalDeviceVulkan12Features vk12_features;
     vk::PhysicalDeviceVulkan13Features vk13_features;
+#ifdef LIBRETRO
+    bool storage_buffer_16bit_access{};
+#endif
     vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT dynamic_state_3_features;
     vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT shader_atomic_float2_features;
     vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR
