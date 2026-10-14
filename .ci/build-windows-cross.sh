@@ -35,18 +35,27 @@ apt-get install -y --no-install-recommends \
 
 # A current CMake; 24.04's pip wants a venv
 mkdir -p "$TOOLS"
-python3 -m venv "$TOOLS/venv"
-"$TOOLS/venv/bin/pip" install -q --upgrade cmake
+if [ ! -x "$TOOLS/venv/bin/cmake" ]; then
+  python3 -m venv "$TOOLS/venv"
+  "$TOOLS/venv/bin/pip" install -q --upgrade cmake
+fi
 export PATH="$TOOLS/venv/bin:$PATH"
 
 # The MSVC CRT and the Windows SDK
-wget -q -O "$TOOLS/xwin.tar.gz" \
-  "https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz"
-tar -xzf "$TOOLS/xwin.tar.gz" -C "$TOOLS" --strip-components=1
-"$TOOLS/xwin" --accept-license --arch x86_64 --cache-dir "$TOOLS/xwin-cache" \
-  splat --output "$TOOLS/msvc"
-rm -rf "$TOOLS/xwin-cache"
+# Fetched once for this xwin version; kept when TOOLS comes back from the
+# buildbot's cache (.gitlab-ci.yml)
 MSVC="$TOOLS/msvc"
+if [ ! -f "$MSVC/.splat-$XWIN_VERSION" ]; then
+  mkdir -p "$TOOLS"
+  rm -rf "$MSVC"
+  wget -q -O "$TOOLS/xwin.tar.gz" \
+    "https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz"
+  tar -xzf "$TOOLS/xwin.tar.gz" -C "$TOOLS" --strip-components=1
+  "$TOOLS/xwin" --accept-license --arch x86_64 --cache-dir "$TOOLS/xwin-cache" \
+    splat --output "$MSVC"
+  rm -rf "$TOOLS/xwin-cache" "$TOOLS/xwin.tar.gz"
+  touch "$MSVC/.splat-$XWIN_VERSION"
+fi
 
 # compiler-rt's builtins for Windows, which the project links by name
 # (128-bit division and the like, which MSVC's runtime does not have). The

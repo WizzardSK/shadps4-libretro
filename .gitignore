@@ -421,3 +421,5 @@ cmake-build-*
 
 # Nix Result symlink
 result
+# the Windows cross build's tools (.ci/build-windows-cross.sh in CI)
+.cross-tools/
