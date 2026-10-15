@@ -152,7 +152,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
         UNREACHABLE_MSG("Failed to create window handle: {}", SDL_GetError());
     }
 
+    // The core's hidden window has the Output Resolution, which can be smaller
+#ifndef LIBRETRO
     SDL_SetWindowMinimumSize(window, 640, 360);
+#endif
 
     bool error = false;
     const SDL_DisplayID displayIndex = SDL_GetDisplayForWindow(window);
