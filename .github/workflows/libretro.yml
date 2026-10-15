@@ -8,7 +8,7 @@ on:
     inputs:
       platforms:
         description: "Platforms to build, comma separated (linux, windows, arm64)"
-        default: "linux,windows"
+        default: "linux,windows,arm64"
 
 concurrency:
   group: libretro-${{ github.ref }}
@@ -220,3 +220,45 @@ jobs:
       with:
         name: shadps4_libretro-windows-x86_64
         path: out/
+
+  # The test build release: a build of all three platforms on the branch named by the
+  # repository variable RELEASE_BRANCH replaces the release's files and moves its tag
+  release:
+    name: Update release
+    if: github.ref_name == vars.RELEASE_BRANCH && contains(inputs.platforms, 'linux') && contains(inputs.platforms, 'windows') && contains(inputs.platforms, 'arm64')
+    needs: [linux, linux-arm64, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: libretro-test
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: actions/download-artifact@v8
+      with:
+        pattern: shadps4_libretro-*
+        path: artifacts
+
+    - name: Zip
+      run: |
+        for dir in artifacts/*/; do
+          (cd "$dir" && zip -9 "../../$(basename "$dir").zip" *)
+        done
+        ls -la *.zip
+
+    - name: Move the tag and replace the files
+      run: |
+        gh api -X PATCH "repos/$GH_REPO/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true
+        gh release upload "$TAG" --clobber *.zip
+
+    - name: Name the build in the release notes
+      run: |
+        version=$(sed -n 's/^set(EMULATOR_VERSION_\(MAJOR\|MINOR\|PATCH\) "\([0-9]*\)")/\2/p' CMakeLists.txt | paste -sd.)
+        short=${GITHUB_SHA::7}
+        first="Test build of the shadPS4 (PlayStation 4) libretro core, shadPS4 $version WIP. Built on $(date -u +%Y-%m-%d) from commit [$short](https://github.com/$GH_REPO/commit/$GITHUB_SHA) of branch \`$GITHUB_REF_NAME\`."
+        gh release view "$TAG" --json body --jq .body > notes.md
+        { echo "$first"; tail -n +2 notes.md; } > new-notes.md
+        gh release edit "$TAG" --notes-file new-notes.md

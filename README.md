@@ -8,7 +8,7 @@ The core is experimental: it is at the stage of first tests, and games may not s
 
 ## Downloads
 
-Builds for Windows and Linux (x86_64) are on the [Releases](https://github.com/WizzardSK/shadps4-libretro/releases) page.
+Builds for Windows, Linux (x86_64) and Linux on ARM (aarch64) are on the [Releases](https://github.com/WizzardSK/shadps4-libretro/releases) page, replaced by every full CI build of the release branch.
 
 - **Windows:** `shadps4_libretro.dll`, Windows 10 or newer.
 - **Linux:** `shadps4_libretro.so`, glibc 2.39 or newer.
