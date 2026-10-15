@@ -81,7 +81,7 @@ void TextureCache::ProcessDownloadImages() {
 
 void TextureCache::DownloadImageMemory(ImageId image_id, DownloadMemoryFlags flags) {
     Image& image = slot_images[image_id];
-    if (False(image.flags & ImageFlagBits::GpuModified)) {
+    if (False(image.flags & ImageFlagBits::GpuModified) || image.IsScaled()) {
         return;
     }
     const auto image_addr = image.info.guest_address;
@@ -562,6 +562,12 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
 
     ASSERT(info.guest_address != 0);
 
+#ifdef LIBRETRO
+    if (desc.type == BindingType::VideoOut) {
+        frame_extent = info.size;
+    }
+#endif
+
     SmallVector<ImageId, 8> image_ids;
     ForEachImageInRegion(info.guest_address, info.guest_size,
                          [&](ImageId image_id, Image& image) { image_ids.push_back(image_id); });
@@ -623,7 +629,23 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     }
     // Create and register a new image
     if (!image_id) {
-        image_id = slot_images.Insert(instance, runtime, slot_image_views, info);
+        u32 scale_num = 1;
+        u32 scale_den = 1;
+#ifdef LIBRETRO
+        // Resolution below the game's: a target of the frame's size, which the game draws
+        // into and samples back, and its depth buffer; one mip and layer, as the frame has
+        const bool target = desc.type == BindingType::RenderTarget ||
+                            desc.type == BindingType::DepthTarget ||
+                            desc.type == BindingType::VideoOut;
+        const u32 width = render_width.load();
+        if (target && width != 0 && width < frame_extent.width && info.size == frame_extent &&
+            info.resources.levels == 1 && info.resources.layers == 1) {
+            scale_num = width;
+            scale_den = frame_extent.width;
+        }
+#endif
+        image_id =
+            slot_images.Insert(instance, runtime, slot_image_views, info, scale_num, scale_den);
         RegisterImage(image_id);
     }
 
@@ -810,6 +832,11 @@ void TextureCache::AssociateStencil(ImageId depth_id, const ImageInfo& depth_inf
 
 void TextureCache::RefreshImage(Image& image) {
     if (False(image.flags & ImageFlagBits::Dirty) || image.info.num_samples > 1) {
+        return;
+    }
+    if (image.IsScaled()) {
+        // Smaller than the guest's memory of it: the game's own draws fill it
+        image.flags &= ~ImageFlagBits::Dirty;
         return;
     }
 

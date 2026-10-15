@@ -174,6 +174,10 @@ private:
     Shader::PushData push_data;
 
     bool attachment_feedback_loop{};
+    // The scale the bound targets are made at on the GPU (Image::scale_num / scale_den),
+    // which the viewports and scissors follow
+    u32 target_scale_num = 1;
+    u32 target_scale_den = 1;
     bool needs_barrier{};
 };
 

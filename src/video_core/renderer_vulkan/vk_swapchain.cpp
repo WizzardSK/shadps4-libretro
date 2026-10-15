@@ -71,7 +71,8 @@ void Swapchain::Create(u32 width_, u32 height_) {
     // Handed to the frontend on the GPU where that can be done; otherwise each finished frame
     // is read back, as before.
     image_count = Libretro::GpuFrameImages();
-    if (!CreateSharedImages()) {
+    // With Resolution: Default they are shared once the game's size is known
+    if (Libretro::GameSizePending() || !CreateSharedImages()) {
         image_count = OFFSCREEN_IMAGE_COUNT;
         CreateOffscreenImages();
     }

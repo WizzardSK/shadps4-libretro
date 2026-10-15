@@ -14,6 +14,9 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/texture_cache/texture_cache.h"
+#ifdef LIBRETRO
+#include "libretro/libretro_bridge.h"
+#endif
 
 namespace Frontend {
 class WindowSDL;
@@ -84,6 +87,10 @@ public:
     VideoCore::Image& RegisterVideoOutSurface(
         const Libraries::VideoOut::BufferAttributeGroup& attribute, VAddr cpu_address) {
         vo_buffers_addr.emplace_back(cpu_address);
+#ifdef LIBRETRO
+        // Resolution: Default hands over the game's own size
+        Libretro::SetGameSize(attribute.attrib.width, attribute.attrib.height);
+#endif
         auto desc = VideoCore::TextureCache::ImageDesc{attribute, cpu_address};
         const auto image_id = texture_cache.FindImage(desc);
         auto& image = texture_cache.GetImage(image_id);

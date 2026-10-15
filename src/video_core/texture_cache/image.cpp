@@ -131,8 +131,10 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
 }
 
 Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
-             Common::SlotVector<ImageView>& slot_image_views_, const ImageInfo& info_)
-    : runtime{&runtime_}, slot_image_views{&slot_image_views_}, info{info_} {
+             Common::SlotVector<ImageView>& slot_image_views_, const ImageInfo& info_,
+             u32 scale_num_, u32 scale_den_)
+    : runtime{&runtime_}, slot_image_views{&slot_image_views_}, info{info_},
+      scale_num{scale_num_}, scale_den{scale_den_} {
     if (info.pixel_format == vk::Format::eUndefined) {
         return;
     }
@@ -184,9 +186,9 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         .imageType = ConvertImageType(info.type),
         .format = supported_format,
         .extent{
-            .width = info.size.width,
-            .height = info.size.height,
-            .depth = info.size.depth,
+            .width = HostSize().width,
+            .height = HostSize().height,
+            .depth = HostSize().depth,
         },
         .mipLevels = static_cast<u32>(info.resources.levels),
         .arrayLayers = static_cast<u32>(info.resources.layers),

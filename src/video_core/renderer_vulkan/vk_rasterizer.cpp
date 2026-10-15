@@ -1023,6 +1023,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
     attachment_feedback_loop = false;
+    target_scale_num = 1;
+    target_scale_den = 1;
     const auto& regs = liverpool->regs;
     const auto& key = pipeline->GetGraphicsKey();
     RenderState state;
@@ -1072,8 +1074,10 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
                                              desc.view_info.range);
         }
 
-        state.width = std::min<u32>(state.width, std::max(image->info.size.width >> mip, 1u));
-        state.height = std::min<u32>(state.height, std::max(image->info.size.height >> mip, 1u));
+        state.width = std::min<u32>(state.width, std::max(image->HostSize().width >> mip, 1u));
+        state.height = std::min<u32>(state.height, std::max(image->HostSize().height >> mip, 1u));
+        target_scale_num = image->scale_num;
+        target_scale_den = image->scale_den;
         state.num_layers = std::min<u32>(state.num_layers, image_view.info.range.extent.layers);
 
         const auto clear_value =
@@ -1123,8 +1127,10 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
                                              vk::AccessFlagBits2::eDepthStencilAttachmentRead,
                                          desc.view_info.range);
 
-        state.width = std::min<u32>(state.width, image.info.size.width);
-        state.height = std::min<u32>(state.height, image.info.size.height);
+        state.width = std::min<u32>(state.width, image.HostSize().width);
+        state.height = std::min<u32>(state.height, image.HostSize().height);
+        target_scale_num = image.scale_num;
+        target_scale_den = image.scale_den;
         state.num_layers = std::min<u32>(state.num_layers, image_view.info.range.extent.layers);
 
         auto& attachment = state.depth_stencil_attachment;
@@ -1418,6 +1424,13 @@ void Rasterizer::UpdateViewportScissorState() const {
             viewport.height = yscale * 2.0f;
         }
 
+        if (target_scale_num != target_scale_den) {
+            const float scale = float(target_scale_num) / float(target_scale_den);
+            viewport.x *= scale;
+            viewport.y *= scale;
+            viewport.width *= scale;
+            viewport.height *= scale;
+        }
         viewports.push_back(viewport);
 
         auto vp_scsr = scsr;
@@ -1431,10 +1444,23 @@ void Rasterizer::UpdateViewportScissorState() const {
             vp_scsr.bottom_right_y = std::min(AmdGpu::Scissor::Clamp(vp_scsr.bottom_right_y),
                                               regs.viewport_scissors[i].bottom_right_y);
         }
-        scissors.push_back({
+        vk::Rect2D scissor{
             .offset = {vp_scsr.top_left_x, vp_scsr.top_left_y},
             .extent = {vp_scsr.GetWidth(), vp_scsr.GetHeight()},
-        });
+        };
+        if (target_scale_num != target_scale_den) {
+            // The pixels the guest's rectangle covers, rounded outward
+            const s64 num = target_scale_num;
+            const s64 den = target_scale_den;
+            const s64 x0 = s64(scissor.offset.x) * num / den;
+            const s64 y0 = s64(scissor.offset.y) * num / den;
+            const s64 x1 = (s64(scissor.offset.x) + scissor.extent.width) * num / den + 1;
+            const s64 y1 = (s64(scissor.offset.y) + scissor.extent.height) * num / den + 1;
+            scissor.offset = vk::Offset2D{static_cast<s32>(x0), static_cast<s32>(y0)};
+            scissor.extent = vk::Extent2D{static_cast<u32>(std::max<s64>(x1 - x0, 0)),
+                                          static_cast<u32>(std::max<s64>(y1 - y0, 0))};
+        }
+        scissors.push_back(scissor);
     }
 
     if (viewports.empty()) {

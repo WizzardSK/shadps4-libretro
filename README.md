@@ -21,9 +21,11 @@ On Windows and on Linux x86_64 the emulator runs the game's code directly on the
 
 ## Video
 
-The emulator renders with Vulkan and needs a GPU with Vulkan 1.3. RetroArch's video driver does not matter: the core hands over finished frames, at the size set by the core option Output Resolution, so it runs under `vulkan`, `glcore`, `gl` or `d3d11` alike.
+The emulator renders with Vulkan and needs a GPU with Vulkan 1.3. RetroArch's video driver does not matter: the core hands over finished frames, at the size set by the core option Resolution, so it runs under `vulkan`, `glcore`, `gl` or `d3d11` alike.
 
 The frames are copied through system memory on their way to RetroArch, which costs speed at high output resolutions.
+
+Resolution is also the size the game renders at, where it is below the game's own (most PS4 games render at 1920x1080): at 960x540 such a game renders a quarter of the pixels, which is much lighter on a slow GPU (Horizon Chase Turbo on an Adreno 618: 22 frames a second at Default, 58 at 960x540). It is the core's own: the emulator makes the render targets of the game's frame size (and their depth buffers) that much smaller on the GPU and draws into them scaled; other targets, shadows and effects among them, stay as they are. Effects that read those targets at their full size can come out wrong, and some games may break; Default is then the fix. Above the game's own resolution the game renders at its own and the picture is scaled up (with FSR Upscaling if it is on). Default hands over the game's own size, as soon as the game has set it up; until then (the first moments) the picture is 1920x1080.
 
 The core option GPU Frame Hand-over does away with that: RetroArch draws the emulator's finished image itself, and nothing is copied. It needs RetroArch's `vulkan` video driver; the emulator then uses the GPU RetroArch is on, where there are several. It is off by default, because where it cannot be done there is no picture at all - a message then says why, and the option has to be turned off again.
 
@@ -81,7 +83,7 @@ RetroArch's ports 1 to 4 are the console's controllers, as many as the core opti
 ## Core options
 
 - **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, PKG Content, Controllers, Show Splash Screen, Exact CPU Flags (only in the box64 build of the ARM core)
-- **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, GPU Frame Hand-over, Shader Cache, Show FPS Counter
+- **Video:** Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, GPU Frame Hand-over, Shader Cache, Show FPS Counter
 - **Audio:** Volume
 - **Trophies:** Trophy Notifications, Trophy Notification Position, Trophy Notification Duration
 - **Logging:** Logging, Separate Log Files, Log Sync

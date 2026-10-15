@@ -45,6 +45,7 @@
 #include "libretro_bridge.h"
 #include "shared_state.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/texture_cache/texture_cache.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -70,6 +71,11 @@ std::atomic<bool> frame_seen{false};
 // The picture handed over on the GPU: whether the images were sent to the core, and which of
 // them have a frame being drawn that is not published yet.
 std::atomic<bool> gpu_frames_active{false};
+
+// Resolution: Default (SetGameSize): the game's size, packed as width << 16 | height, and
+// whether the presenter has taken it
+std::atomic<std::uint32_t> game_size{0};
+std::atomic<bool> game_size_new{false};
 std::atomic<bool> image_in_flight[Libretro::FRAME_IMAGES];
 
 Libretro::SharedState* OpenShared(const char* argument) {
@@ -313,9 +319,40 @@ int RunEmulator(const char* argument) {
 
 namespace Libretro {
 
+void SetGameSize(std::uint32_t width, std::uint32_t height) {
+    if (!shared || shared->options.follow_game_size == 0 || width == 0 || height == 0) {
+        return;
+    }
+    width = std::min(width, MAX_WIDTH);
+    height = std::min(height, MAX_HEIGHT);
+    const std::uint32_t packed = width << 16 | height;
+    if (game_size.exchange(packed) != packed) {
+        game_size_new.store(true);
+    }
+}
+
+bool TakeGameSize(std::uint32_t& width, std::uint32_t& height) {
+    if (!game_size_new.exchange(false)) {
+        return false;
+    }
+    const std::uint32_t packed = game_size.load();
+    width = packed >> 16;
+    height = packed & 0xFFFF;
+    return true;
+}
+
+bool GameSizePending() {
+    return shared && shared->options.follow_game_size != 0 && game_size.load() == 0;
+}
+
 void PushFrame(const void* pixels, std::uint32_t width, std::uint32_t height) {
     if (!shared || !pixels || width == 0 || height == 0 || width > MAX_WIDTH ||
         height > MAX_HEIGHT) {
+        return;
+    }
+    // Until the game's size is known the images for the frontend are not made yet, and it
+    // expects those, not frames in the shared memory
+    if (GpuFramesWanted() && GameSizePending()) {
         return;
     }
     // Into the slot that is neither the newest nor the one the core is showing
@@ -479,6 +516,7 @@ void ApplyCoreOptions() {
     EmulatorSettings.SetShowSplash(options.show_splash != 0);
     EmulatorSettings.SetWindowWidth(options.width);
     EmulatorSettings.SetWindowHeight(options.height);
+    VideoCore::render_width.store(options.render_width);
     EmulatorSettings.SetFsrEnabled(options.fsr != 0);
     EmulatorSettings.SetRcasEnabled(options.rcas != 0);
     EmulatorSettings.SetVblankFrequency(options.vblank_frequency);

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <mutex>
 #include <optional>
 
@@ -85,7 +86,8 @@ public:
 
 struct Image : public Common::LRUNode<> {
     explicit Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime,
-                   Common::SlotVector<ImageView>& slot_image_views, const ImageInfo& info);
+                   Common::SlotVector<ImageView>& slot_image_views, const ImageInfo& info,
+                   u32 scale_num = 1, u32 scale_den = 1);
     ~Image();
 
     Image(const Image&) = delete;
@@ -104,6 +106,23 @@ struct Image : public Common::LRUNode<> {
 
     bool IsUntracked() {
         return track_addr == 0 || track_addr_end == 0;
+    }
+
+    // The libretro core's Resolution below the game's: a render target of the game's frame
+    // size is made scale_num / scale_den of it on the GPU (HostSize), while info keeps what
+    // the game sees. Such an image is never uploaded from or downloaded to guest memory.
+    bool IsScaled() const {
+        return scale_num != scale_den;
+    }
+
+    Extent3D HostSize() const {
+        if (!IsScaled()) {
+            return info.size;
+        }
+        const auto scaled = [this](u32 value) {
+            return std::max(static_cast<u32>(u64(value) * scale_num / scale_den), 1u);
+        };
+        return Extent3D{scaled(info.size.width), scaled(info.size.height), info.size.depth};
     }
 
     bool HasGpuValidData() const {
@@ -143,6 +162,8 @@ public:
     Common::SlotVector<ImageView>* slot_image_views;
     std::mutex mutex;
     ImageInfo info;
+    u32 scale_num = 1;
+    u32 scale_den = 1;
     vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor;
     vk::SampleCountFlags supported_samples = vk::SampleCountFlagBits::e1;
     ImageFlagBits flags = ImageFlagBits::Dirty;

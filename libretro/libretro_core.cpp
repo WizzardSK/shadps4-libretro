@@ -81,8 +81,9 @@ retro_input_poll_t input_poll_cb = nullptr;
 retro_input_state_t input_state_cb = nullptr;
 retro_log_printf_t log_cb = nullptr;
 
-constexpr unsigned kWidth = 1280;
-constexpr unsigned kHeight = 720;
+// Resolution: Default, the PS4's own
+constexpr unsigned kWidth = 1920;
+constexpr unsigned kHeight = 1080;
 constexpr double kFps = 60.0;
 constexpr int kSampleRate = 48000;
 constexpr int kAudioFrames = kSampleRate / 60;
@@ -118,7 +119,7 @@ uint32_t shown_image = 0;
 int gpu_socket = -1;
 int gpu_socket_emulator = -1;
 
-// The Output Resolution the game was loaded with: the size frames come at, and so the largest
+// The Resolution the game was loaded with: the size frames come at, and so the largest
 // the frontend is told to expect. No larger - a frontend sizes its shader passes by it.
 unsigned output_width = kWidth;
 unsigned output_height = kHeight;
@@ -167,15 +168,21 @@ void ReadCoreOptions(Libretro::SharedOptions& options) {
     options.network = enabled("shadps4_network", "disabled");
     options.show_splash = enabled("shadps4_show_splash", "disabled");
 
+    // Resolution: the picture handed over at that size and, where it is below the game's
+    // own, the game rendered at it too (the emulator works out how much smaller)
     options.width = kWidth;
     options.height = kHeight;
+    options.render_width = 0;
+    options.follow_game_size = 1;
     unsigned width = 0;
     unsigned height = 0;
-    const std::string resolution = OptionValue("shadps4_resolution", "1280x720");
+    const std::string resolution = OptionValue("shadps4_game_resolution", "default");
     if (std::sscanf(resolution.c_str(), "%ux%u", &width, &height) == 2 && width >= 320 &&
         width <= Libretro::MAX_WIDTH && height >= 180 && height <= Libretro::MAX_HEIGHT) {
         options.width = width;
         options.height = height;
+        options.render_width = width;
+        options.follow_game_size = 0;
     }
 
     options.fsr = enabled("shadps4_fsr", "disabled");

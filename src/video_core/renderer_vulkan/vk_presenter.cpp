@@ -764,7 +764,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
 
     auto& image = texture_cache.GetImage(image_id);
     auto image_view = *image.FindView(view_info).image_view;
-    const vk::Extent2D image_size = {image.info.size.width, image.info.size.height};
+    // Its size on the GPU, which Render Resolution may make smaller than the guest's
+    const vk::Extent2D image_size = {image.HostSize().width, image.HostSize().height};
     expected_ratio = static_cast<float>(image_size.width) / static_cast<float>(image_size.height);
 
     const u32 capture_game_only_count = VideoCore::ConsumeGameOnlyScreenshotRequests();
@@ -911,6 +912,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     };
 
+#ifdef LIBRETRO
+    // Resolution: Default - the picture at the game's size, once it has said it
+    if (u32 game_width, game_height; Libretro::TakeGameSize(game_width, game_height)) {
+        window.SetSize(game_width, game_height);
+        swapchain.Recreate(game_width, game_height);
+    }
+#endif
     // Recreate the swapchain if the window was resized.
     if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
         swapchain.Recreate(window.GetWidth(), window.GetHeight());

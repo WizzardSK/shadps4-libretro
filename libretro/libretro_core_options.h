@@ -261,13 +261,14 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         "disabled"
     },
     {
-        "shadps4_resolution",
-        "Output Resolution",
+        "shadps4_game_resolution",
+        "Resolution",
         NULL,
-        "The size of the picture the core hands over. The game renders at its own resolution and is scaled to this size.",
+        "The size of the picture, and of the game's rendering. Default: the game renders at its own resolution and the picture is that size. Below the game's own, the game renders at the chosen size, which is much lighter on a slow GPU; effects that expect the full size can come out wrong. Above it, the game renders at its own and the picture is scaled up. Requires restart.",
         NULL,
         "video",
         {
+            { "default",   "Default (game's resolution)" },
             { "320x180",   "320x180" },
             { "480x270",   "480x270" },
             { "640x360",   "640x360" },
@@ -278,7 +279,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             { "3840x2160", "3840x2160 (4K)" },
             { NULL, NULL },
         },
-        "1280x720"
+        "default"
     },
     {
         "shadps4_fsr",

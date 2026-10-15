@@ -51,6 +51,11 @@ public:
                        std::span<const vk::BufferImageCopy> download_copies);
 
     void CopyImage(VideoCore::Image* src, VideoCore::Image* dst);
+    // Between images of the same layout made at different sizes on the GPU (the libretro
+    // core's Render Resolution): each level of src stretched over dst's, starting at dst's
+    // level dst_mip and layer dst_layer. False where a blit cannot do it.
+    bool BlitScaled(VideoCore::Image* src, VideoCore::Image* dst, u32 dst_mip = 0,
+                    u32 dst_layer = 0);
     void CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                              const VideoCore::Buffer* buffer, u64 offset);
     void CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32 slice);

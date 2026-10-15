@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -32,6 +33,11 @@ class Runtime;
 }
 
 namespace VideoCore {
+
+// The libretro core's Resolution, as a width: when it is below the game's frame size (that
+// of its video out buffers), the render targets of that size are made that much smaller on
+// the GPU. 0 for the game's own, as elsewhere.
+inline std::atomic<u32> render_width{0};
 
 class BufferCache;
 class PageManager;
@@ -403,6 +409,8 @@ private:
     PageManager& page_manager;
     PageTable page_table;
     Common::SlotVector<Image> slot_images;
+    // The size of the game's video out buffers, which render_width scales targets of
+    Extent3D frame_extent{};
     Common::SlotVector<ImageView> slot_image_views;
     Common::SlotVector<Sampler> slot_samplers;
     BlitHelper blit_helper;

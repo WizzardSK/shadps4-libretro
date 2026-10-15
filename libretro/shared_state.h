@@ -13,7 +13,7 @@
 namespace Libretro {
 
 inline constexpr std::uint32_t SHARED_MAGIC = 0x34505368; // "hSP4"
-inline constexpr std::uint32_t SHARED_VERSION = 10;
+inline constexpr std::uint32_t SHARED_VERSION = 11;
 
 inline constexpr std::uint32_t MAX_WIDTH = 3840;
 inline constexpr std::uint32_t MAX_HEIGHT = 2160;
@@ -85,6 +85,11 @@ struct SharedOptions {
     std::uint32_t height;
     std::uint32_t fsr;
     std::uint32_t rcas;
+    /// The width the game is rendered at when below its own, or 0 (Resolution: Default).
+    std::uint32_t render_width;
+    /// Resolution: Default - the picture is the game's own size, once the game has said it
+    /// (its video out buffers); width and height are what it is until then.
+    std::uint32_t follow_game_size;
     std::uint32_t vblank_frequency;
     std::uint32_t readbacks;
     std::uint32_t direct_memory_access;

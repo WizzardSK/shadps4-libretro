@@ -13,6 +13,13 @@ namespace Libretro {
 /// bottom, no padding between them. Called from the renderer's thread.
 void PushFrame(const void* pixels, std::uint32_t width, std::uint32_t height);
 
+// Resolution: Default - the size of the game's video out buffers, as it registers them. The
+// picture follows it: TakeGameSize hands a new one to the presenter once, and until the
+// first, GameSizePending holds back the images shared with the frontend.
+void SetGameSize(std::uint32_t width, std::uint32_t height);
+bool TakeGameSize(std::uint32_t& width, std::uint32_t& height);
+bool GameSizePending();
+
 /// The rate the frontend is given the sound at.
 inline constexpr int AUDIO_SAMPLE_RATE = 48000;
 

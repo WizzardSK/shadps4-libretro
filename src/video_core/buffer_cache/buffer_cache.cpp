@@ -540,6 +540,10 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
         return false;
     }
     Image& image = texture_cache.GetImage(image_id);
+    if (image.IsScaled()) {
+        // Render Resolution: smaller than the guest's memory of it, so not copied there
+        return false;
+    }
     ASSERT_MSG(device_addr == image.info.guest_address,
                "Texel buffer aliases image subresources {:x} : {:x}", device_addr,
                image.info.guest_address);
