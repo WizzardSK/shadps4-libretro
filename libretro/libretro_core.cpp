@@ -123,6 +123,47 @@ int gpu_socket_emulator = -1;
 // the frontend is told to expect. No larger - a frontend sizes its shader passes by it.
 unsigned output_width = kWidth;
 unsigned output_height = kHeight;
+// The largest picture the frontend was told to expect (retro_get_system_av_info, or
+// SET_SYSTEM_AV_INFO since). A larger one needs SET_SYSTEM_AV_INFO: SET_GEOMETRY cannot raise
+// it, and the frontend's buffers (a software video filter's among them) are sized by it.
+unsigned declared_max_width = kWidth;
+unsigned declared_max_height = kHeight;
+// The size the frontend was last told a picture has
+unsigned announced_width = kWidth;
+unsigned announced_height = kHeight;
+
+// The frontend told of a picture of another size, from retro_run, before it is handed over.
+// Larger than it was told to expect (Resolution changed before a Reset, or Default taking the
+// game's size): it sizes its buffers again with SET_SYSTEM_AV_INFO - SET_GEOMETRY cannot raise
+// the max, and a software video filter (scanline2x) wrote past its buffer and crashed it.
+void AnnounceSize(unsigned width, unsigned height) {
+    if (width == announced_width && height == announced_height) {
+        return;
+    }
+    announced_width = width;
+    announced_height = height;
+    if (width > declared_max_width || height > declared_max_height) {
+        declared_max_width = std::max(declared_max_width, width);
+        declared_max_height = std::max(declared_max_height, height);
+        struct retro_system_av_info av_info {};
+        av_info.geometry.base_width = width;
+        av_info.geometry.base_height = height;
+        av_info.geometry.max_width = declared_max_width;
+        av_info.geometry.max_height = declared_max_height;
+        av_info.geometry.aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
+        av_info.timing.fps = kFps;
+        av_info.timing.sample_rate = kSampleRate;
+        environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av_info);
+        return;
+    }
+    struct retro_game_geometry geometry {};
+    geometry.base_width = width;
+    geometry.base_height = height;
+    geometry.max_width = declared_max_width;
+    geometry.max_height = declared_max_height;
+    geometry.aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
+    environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geometry);
+}
 
 struct retro_rumble_interface rumble {};
 
@@ -930,13 +971,7 @@ void TakeFrame() {
         if (width != shown_width || height != shown_height) {
             shown_width = width;
             shown_height = height;
-            struct retro_game_geometry geometry {};
-            geometry.base_width = width;
-            geometry.base_height = height;
-            geometry.max_width = std::max(output_width, width);
-            geometry.max_height = std::max(output_height, height);
-            geometry.aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
-            environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geometry);
+            AnnounceSize(width, height);
         }
         return;
     }
@@ -1059,6 +1094,10 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info) {
     info->geometry.base_height = output_height;
     info->geometry.max_width = output_width;
     info->geometry.max_height = output_height;
+    declared_max_width = output_width;
+    declared_max_height = output_height;
+    announced_width = output_width;
+    announced_height = output_height;
     info->geometry.aspect_ratio = 16.0f / 9.0f;
     info->timing.fps = kFps;
     info->timing.sample_rate = kSampleRate;
@@ -1308,6 +1347,7 @@ RETRO_API void retro_run(void) {
             shown_width = output_width;
             shown_height = output_height;
         }
+        AnnounceSize(shown_width, shown_height);
         Libretro::GpuFrames::Show(video_cb, shown_image, shown_latest != 0, shown_width,
                                   shown_height);
     } else if (video_cb) {
@@ -1318,6 +1358,7 @@ RETRO_API void retro_run(void) {
             shown_width = output_width;
             shown_height = output_height;
         }
+        AnnounceSize(shown_width, shown_height);
         video_cb(shown_frame, shown_width, shown_height, shown_width * sizeof(uint32_t));
     }
     if (audio_batch_cb) {
