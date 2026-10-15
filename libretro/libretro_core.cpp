@@ -167,8 +167,8 @@ void ReadCoreOptions(Libretro::SharedOptions& options) {
     unsigned width = 0;
     unsigned height = 0;
     const std::string resolution = OptionValue("shadps4_resolution", "1280x720");
-    if (std::sscanf(resolution.c_str(), "%ux%u", &width, &height) == 2 && width >= 640 &&
-        width <= Libretro::MAX_WIDTH && height >= 360 && height <= Libretro::MAX_HEIGHT) {
+    if (std::sscanf(resolution.c_str(), "%ux%u", &width, &height) == 2 && width >= 320 &&
+        width <= Libretro::MAX_WIDTH && height >= 180 && height <= Libretro::MAX_HEIGHT) {
         options.width = width;
         options.height = height;
     }

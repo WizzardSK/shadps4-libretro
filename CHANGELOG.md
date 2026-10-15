@@ -4,6 +4,7 @@ What changed in the libretro core of this fork, newest first. Changes that come 
 
 ## Unreleased
 
+- Output Resolution can also be 480x270 or 320x180, for the slowest machines; both keep the 16:9 picture. The game still renders at its own resolution.
 - Merged upstream shadPS4 up to 5dad1692 (0.20.0 and after it): among others a garbage collector for the texture and buffer caches, CMask metadata, libSceUsbStorage and the I/O event queue. The core's own changes are kept as they were.
 - GPUs without 8-bit or 16-bit storage buffer access (Adreno 618 with Turnip among them) show 8- and 16-bit textures right: their detiling went through 8- and 16-bit buffer reads and writes the GPU does not do, and text and some textures came out as stripes (Horizon Chase Turbo's lettering and skyline). There the textures are detiled over 32-bit words; tried on that GPU, where Horizon Chase Turbo's menus and track pictures now read right.
 - ARM: box64 tells the emulator a write fault from the CPU's own exception syndrome, where it guessed from the x86 instruction, which says "read" for a fault inside a native function such as memcpy. The emulator then left the page protected and the same write faulted forever: Horizon Chase Turbo stopped while loading, with its threads waiting on a mutex the faulting one held; with the change it gets past the loading and plays.

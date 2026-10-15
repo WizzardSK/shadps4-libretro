@@ -254,6 +254,8 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         NULL,
         "video",
         {
+            { "320x180",   "320x180" },
+            { "480x270",   "480x270" },
             { "640x360",   "640x360" },
             { "960x540",   "960x540" },
             { "1280x720",  "1280x720 (720p)" },
