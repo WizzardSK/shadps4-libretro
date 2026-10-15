@@ -12,6 +12,9 @@
 #include "core/file_sys/devices/logger.h"
 #include "core/file_sys/devices/nop_device.h"
 #include "core/file_sys/fs.h"
+#ifdef LIBRETRO
+#include "libretro/pkg_backend.h"
+#endif
 
 namespace Core::FileSys {
 
@@ -38,6 +41,10 @@ private:
 };
 
 bool MntPoints::ignore_game_patches = false;
+#ifdef LIBRETRO
+std::filesystem::path MntPoints::libretro_update;
+std::vector<std::filesystem::path> MntPoints::libretro_addcont;
+#endif
 
 std::string RemoveTrailingSlashes(const std::string& path) {
     // Remove trailing slashes to make comparisons simpler.
@@ -76,6 +83,11 @@ std::optional<std::filesystem::path> ResolveGameRoot(const std::filesystem::path
     if (std::filesystem::is_directory(root)) {
         return root;
     }
+#ifdef LIBRETRO
+    if (Libretro::IsPkgFile(root)) {
+        return root;
+    }
+#endif
     if (root.extension() == ".zar" && std::filesystem::is_regular_file(root)) {
         return root;
     }
@@ -92,6 +104,12 @@ std::shared_ptr<IBackend> MntPoints::CreateBackend(const std::filesystem::path& 
     if (std::filesystem::is_directory(host_path)) {
         return std::make_shared<HostFsBackend>(host_path, read_only);
     }
+#ifdef LIBRETRO
+    if (Libretro::IsPkgFile(host_path)) {
+        auto backend = std::make_shared<Libretro::PkgBackend>(host_path);
+        return backend->IsOpen() ? backend : nullptr;
+    }
+#endif
     const auto try_zar = [](const std::filesystem::path& zar) -> std::shared_ptr<IBackend> {
         if (std::filesystem::is_regular_file(zar) && zar.extension() == ".zar") {
             auto backend = std::make_shared<ZArchiveBackend>(zar);
@@ -142,7 +160,12 @@ void MntPoints::Mount(const std::filesystem::path& host_folder, const std::strin
             stack.push_back(std::move(mods));
         }
         if (!ignore_game_patches) {
+#ifdef LIBRETRO
+            auto patch = libretro_update.empty() ? probe_overlay(host_folder, "-UPDATE")
+                                                 : CreateBackend(libretro_update, true);
+#else
             auto patch = probe_overlay(host_folder, "-UPDATE");
+#endif
             if (!patch) {
                 patch = probe_overlay(host_folder, "-patch");
             }
@@ -232,6 +255,11 @@ std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_rea
     if (!std::filesystem::exists(patch_path)) {
         patch_path = OverlayPath(mount->host_path, "-patch");
     }
+#ifdef LIBRETRO
+    if (!libretro_update.empty()) {
+        patch_path = libretro_update;
+    }
+#endif
 
     // Mods folder can only be at mount + "-mods"
     std::filesystem::path mods_path = OverlayPath(mount->host_path, "-mods");

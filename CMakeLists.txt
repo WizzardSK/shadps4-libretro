@@ -1349,6 +1349,11 @@ if (ENABLE_LIBRETRO)
         libretro/libretro.h
         libretro/libretro_vulkan.h
         libretro/memory_export.cpp
+        libretro/pkg_backend.cpp
+        libretro/pkg_backend.h
+        libretro/pkg_entries.cpp
+        libretro/pkg_reader.cpp
+        libretro/pkg_reader.h
         libretro/libretro_bridge.h
         libretro/libretro_core.cpp
         libretro/libretro_core_options.h

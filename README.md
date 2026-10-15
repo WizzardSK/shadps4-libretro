@@ -31,6 +31,24 @@ The core option GPU Frame Hand-over does away with that: RetroArch draws the emu
 
 A dumped PS4 game as a folder; load its `eboot.bin`.
 
+A fake-signed PKG (fPKG) of a game can be loaded as it is. The update and additional content are PKGs too, put beside the game's: of the PKGs in the game's folder with its title ID, the update with the highest version is laid over the game, and each additional content is offered to it. Load the game's PKG, not the update's.
+
+How the PKG is run is the core option System > PKG Content:
+
+- **Run from PKG** (the default): the game runs straight out of the PKG. Its files are decrypted and unpacked as the game reads them, and nothing is written to the disk.
+- **Install:** the game is extracted into `system/shadPS4/games/<title ID>/`, its update into `games/<title ID>-UPDATE/` and each additional content into `addcont/<title ID>/<entitlement label>/`, and the game is run from there. This happens the first time; after that the installed game is started at once, and a PKG that was replaced by another (a new update) is installed again. It reads faster where the drive or the machine is slow, but takes the room of the whole game.
+
+The core carries no keys. PKGs are opened with two RSA keys that go into `system/shadPS4/pkg_keys.txt`, one `name = hex` a line, big-endian:
+
+```
+derived_key3_modulus = ...
+derived_key3_private_exponent = ...
+fake_modulus = ...
+fake_private_exponent = ...
+```
+
+`derived_key3_public_exponent` and `fake_public_exponent` can be given too; left out they are 65537. These are the keys of upstream shadPS4's `src/core/crypto/keys.h` before its PKG support was removed (its `PkgDerivedKey3Keyset` and `FakeKeyset`). Without the file, a PKG is not started and a message names the file. PKGs signed for retail consoles cannot be opened.
+
 ## System modules and fonts
 
 The PS4 has no BIOS file, and the core starts without one. What takes its place are system modules and fonts dumped from a console's firmware, and some games do not start without them:
@@ -62,7 +80,7 @@ RetroArch's ports 1 to 4 are the console's controllers, as many as the core opti
 
 ## Core options
 
-- **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, Controllers, Show Splash Screen, Exact CPU Flags (ARM only)
+- **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, PKG Content, Controllers, Show Splash Screen, Exact CPU Flags (ARM only)
 - **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, GPU Frame Hand-over, Shader Cache, Show FPS Counter
 - **Audio:** Volume
 - **Trophies:** Trophy Notifications, Trophy Notification Position, Trophy Notification Duration

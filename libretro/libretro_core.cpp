@@ -29,13 +29,17 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cerrno>
 #include <climits>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "common/scm_rev.h"
@@ -43,6 +47,7 @@
 #include "libretro.h"
 #include "gpu_frames.h"
 #include "libretro_core_options.h"
+#include "pkg_reader.h"
 #include "shared_state.h"
 
 #ifdef _WIN32
@@ -225,6 +230,214 @@ void Notify(const char* text) {
         environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &old);
     }
     Log(RETRO_LOG_ERROR, "%s", text);
+}
+
+// The frontend's paths are UTF-8.
+std::filesystem::path Utf8Path(const std::string& text) {
+    return std::filesystem::path(
+        std::u8string_view(reinterpret_cast<const char8_t*>(text.data()), text.size()));
+}
+
+std::string Utf8String(const std::filesystem::path& path) {
+    const std::u8string text = path.u8string();
+    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
+bool IsPkgPath(const std::string& path) {
+    const auto dot = path.find_last_of('.');
+    if (dot == std::string::npos) {
+        return false;
+    }
+    std::string extension = path.substr(dot);
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".pkg";
+}
+
+// The core option PKG Content's Install: a PKG's files extracted into dir. A dir that holds
+// the same PKG already (by its marker file) is kept as it is; one that holds another is
+// replaced.
+bool InstallPkg(const std::filesystem::path& pkg, const std::filesystem::path& dir,
+                const std::string& user_dir) {
+    std::error_code ec;
+    const auto marker = dir / ".libretro_pkg";
+    const std::string stamp = Utf8String(pkg.filename()) + "\n" +
+                              std::to_string(std::filesystem::file_size(pkg, ec)) + "\n";
+    {
+        std::ifstream in(marker, std::ios::binary);
+        const std::string have((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        if (have == stamp) {
+            Log(RETRO_LOG_INFO, "%s is installed in %s", Utf8String(pkg).c_str(),
+                Utf8String(dir).c_str());
+            return true;
+        }
+    }
+
+    Libretro::PkgReader reader;
+    std::string error;
+    if (!reader.Open(pkg, Libretro::PkgKeysFile(Utf8Path(user_dir)), error)) {
+        Notify(("shadPS4: the PKG cannot be read: " + error).c_str());
+        return false;
+    }
+    const auto files = reader.Files();
+    u64 total = 0;
+    for (const auto& rel : files) {
+        total += reader.Find(rel)->size;
+    }
+    std::filesystem::create_directories(dir.parent_path(), ec);
+    const auto space = std::filesystem::space(dir.parent_path(), ec);
+    if (!ec && space.available < total) {
+        Notify(("shadPS4: installing " + Utf8String(pkg.filename()) + " needs " +
+                std::to_string(total >> 20) + " MiB, and there are " +
+                std::to_string(space.available >> 20) + " MiB free")
+                   .c_str());
+        return false;
+    }
+
+    Log(RETRO_LOG_INFO, "Installing %s into %s: %zu files, %llu MiB", Utf8String(pkg).c_str(),
+        Utf8String(dir).c_str(), files.size(), static_cast<unsigned long long>(total >> 20));
+    std::filesystem::remove_all(dir, ec);
+    std::vector<u8> buffer(4 << 20);
+    u64 done = 0;
+    int told = 0;
+    for (const auto& rel : files) {
+        const auto* node = reader.Find(rel);
+        const auto target = dir / Utf8Path(rel);
+        std::filesystem::create_directories(target.parent_path(), ec);
+        std::ofstream out(target, std::ios::binary | std::ios::trunc);
+        for (u64 at = 0; out && at < node->size;) {
+            const u64 read = reader.Read(*node, at, buffer.size(), buffer.data());
+            if (read == 0) {
+                break;
+            }
+            out.write(reinterpret_cast<const char*>(buffer.data()),
+                      static_cast<std::streamsize>(read));
+            at += read;
+            done += read;
+        }
+        if (!out) {
+            Notify(("shadPS4: " + Utf8String(target) + " could not be written").c_str());
+            return false;
+        }
+        if (total && done * 10 / total > static_cast<u64>(told)) {
+            told = static_cast<int>(done * 10 / total);
+            Log(RETRO_LOG_INFO, "Installing: %d %%", told * 10);
+        }
+    }
+    std::ofstream(marker, std::ios::binary) << stamp;
+    return true;
+}
+
+// Install mode: the game into games/<title ID>, its update into games/<title ID>-UPDATE and
+// each additional content into addcont/<title ID>/<entitlement label>, the folders the
+// emulator looks in; boot is then the installed eboot.bin.
+bool InstallPkgContent(const std::string& game, const std::string& user_dir,
+                       const std::string& title_id, const std::string& update,
+                       const std::string& addcont, std::string& boot) {
+    const auto user = Utf8Path(user_dir);
+    const auto game_dir = user / "games" / Utf8Path(title_id);
+    const auto update_dir = user / "games" / Utf8Path(title_id + "-UPDATE");
+    if (!InstallPkg(Utf8Path(game), game_dir, user_dir)) {
+        return false;
+    }
+    std::error_code ec;
+    if (!update.empty()) {
+        if (!InstallPkg(Utf8Path(update), update_dir, user_dir)) {
+            return false;
+        }
+    } else if (std::filesystem::exists(update_dir / ".libretro_pkg", ec)) {
+        // An update this core installed whose PKG is gone.
+        Log(RETRO_LOG_INFO, "The update's PKG is gone: %s removed", Utf8String(update_dir).c_str());
+        std::filesystem::remove_all(update_dir, ec);
+    }
+    for (std::string_view paths{addcont}; !paths.empty();) {
+        const auto end = paths.find('\n');
+        const std::string path{paths.substr(0, end)};
+        paths = end == std::string_view::npos ? std::string_view{} : paths.substr(end + 1);
+        Libretro::PkgSummary summary;
+        std::string error;
+        if (path.empty() || !Libretro::ReadPkgSummary(Utf8Path(path), summary, error)) {
+            continue;
+        }
+        // The content ID is UPxxxx-CUSAxxxxx_xx-<entitlement label>.
+        const auto dash = summary.content_id.find_last_of('-');
+        if (dash == std::string::npos || dash + 1 >= summary.content_id.size()) {
+            continue;
+        }
+        const auto label = summary.content_id.substr(dash + 1);
+        if (!InstallPkg(Utf8Path(path), user / "addcont" / Utf8Path(title_id) / Utf8Path(label),
+                        user_dir)) {
+            return false;
+        }
+    }
+    boot = Utf8String(game_dir / "eboot.bin");
+    if (boot.size() >= Libretro::PATH_BYTES) {
+        Log(RETRO_LOG_ERROR, "The installed game's path is too long");
+        return false;
+    }
+    return true;
+}
+
+// A game run from its PKG: the keys are there, the PKG is a game's, and its update (the
+// highest version) and additional content are the PKGs of the same title beside it.
+bool FindPkgContent(const std::string& game, const std::string& user_dir, std::string& title_id,
+                    std::string& update, std::string& addcont) {
+    Libretro::PkgKeys keys;
+    std::string error;
+    if (!Libretro::LoadPkgKeys(Libretro::PkgKeysFile(Utf8Path(user_dir)), keys,
+                               error)) {
+        Notify(("shadPS4: " + error).c_str());
+        return false;
+    }
+    const std::filesystem::path game_path = Utf8Path(game);
+    Libretro::PkgSummary summary;
+    if (!Libretro::ReadPkgSummary(game_path, summary, error)) {
+        Notify(("shadPS4: the PKG cannot be read: " + error).c_str());
+        return false;
+    }
+    if (summary.category == "gp" || summary.category == "ac") {
+        Notify("shadPS4: this PKG is an update or additional content; load the game's PKG, the "
+               "others are taken from beside it");
+        return false;
+    }
+    Log(RETRO_LOG_INFO, "PKG %s: %s, version %s", game.c_str(), summary.title_id.c_str(),
+        summary.app_ver.c_str());
+    title_id = summary.title_id;
+
+    std::string update_version;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(game_path.parent_path(), ec)) {
+        const std::string path = Utf8String(entry.path());
+        if (!entry.is_regular_file(ec) || !IsPkgPath(path) || entry.path() == game_path) {
+            continue;
+        }
+        Libretro::PkgSummary other;
+        if (!Libretro::ReadPkgSummary(entry.path(), other, error) ||
+            other.title_id != summary.title_id) {
+            continue;
+        }
+        if (other.category == "gp" && (update.empty() || other.app_ver > update_version)) {
+            update = path;
+            update_version = other.app_ver;
+        } else if (other.category == "ac") {
+            if (addcont.size() + path.size() + 1 < Libretro::ADDCONT_BYTES) {
+                addcont += path + "\n";
+                Log(RETRO_LOG_INFO, "Additional content %s", path.c_str());
+            } else {
+                Log(RETRO_LOG_WARN, "Too many additional contents: %s left out", path.c_str());
+            }
+        }
+    }
+    if (!update.empty()) {
+        if (update.size() >= Libretro::PATH_BYTES) {
+            Log(RETRO_LOG_WARN, "The update's path is too long: %s left out", update.c_str());
+            update.clear();
+        } else {
+            Log(RETRO_LOG_INFO, "Update %s, version %s", update.c_str(), update_version.c_str());
+        }
+    }
+    return true;
 }
 
 // ---- The shared memory and the emulator's process, per platform ----
@@ -826,7 +1039,7 @@ RETRO_API void retro_get_system_info(struct retro_system_info* info) {
     std::memset(info, 0, sizeof(*info));
     info->library_name = "shadPS4";
     info->library_version = Common::g_version;
-    info->valid_extensions = "bin";
+    info->valid_extensions = "bin|pkg";
     info->need_fullpath = true;
     info->block_extract = true;
 }
@@ -862,7 +1075,7 @@ RETRO_API void retro_reset(void) {
 
 RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     if (!game || !game->path || !*game->path) {
-        Log(RETRO_LOG_ERROR, "No content: load a game's eboot.bin");
+        Log(RETRO_LOG_ERROR, "No content: load a game's eboot.bin or PKG");
         return false;
     }
     const std::string user_dir = SystemDirectory();
@@ -874,6 +1087,25 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
         user_dir.size() >= Libretro::PATH_BYTES) {
         Log(RETRO_LOG_ERROR, "The game's path or the system directory is too long");
         return false;
+    }
+
+    // A PKG is run from as it is, or installed first and its eboot.bin run (PKG Content).
+    std::string boot_path = game->path;
+    std::string update_path;
+    std::string addcont_paths;
+    if (IsPkgPath(game->path)) {
+        std::string title_id;
+        if (!FindPkgContent(game->path, user_dir, title_id, update_path, addcont_paths)) {
+            return false;
+        }
+        if (OptionValue("shadps4_pkg_content", "run") == "install") {
+            if (!InstallPkgContent(game->path, user_dir, title_id, update_path, addcont_paths,
+                                   boot_path)) {
+                return false;
+            }
+            update_path.clear();
+            addcont_paths.clear();
+        }
     }
 
     enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
@@ -891,8 +1123,10 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     // New memory is zeroed: the counters and flags start there.
     shared->magic = Libretro::SHARED_MAGIC;
     shared->version = Libretro::SHARED_VERSION;
-    std::strcpy(shared->eboot_path, game->path);
+    std::strcpy(shared->eboot_path, boot_path.c_str());
     std::strcpy(shared->user_dir, user_dir.c_str());
+    std::strcpy(shared->update_path, update_path.c_str());
+    std::strcpy(shared->addcont_paths, addcont_paths.c_str());
     ReadCoreOptions(shared->options);
     DescribeInput(shared->options.pads);
     // The picture on the GPU, when the option asks for it and the frontend gives a Vulkan
@@ -942,7 +1176,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
 
     Log(RETRO_LOG_INFO, "shadPS4 %s (%s), user directory %s", Common::g_version,
         Common::g_scm_rev, user_dir.c_str());
-    Log(RETRO_LOG_INFO, "Starting %s", game->path);
+    Log(RETRO_LOG_INFO, "Starting %s", boot_path.c_str());
     const bool started = StartEmulator(argument);
 #ifndef _WIN32
     // The emulator has its end now, or was not started.

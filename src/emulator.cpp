@@ -305,7 +305,12 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         for (const auto& comp : file) {
             if (!found) {
                 accum /= comp;
+#ifdef LIBRETRO
+                // The libretro core runs a game from its PKG as from a .zar.
+                if (comp.extension() == ".zar" || comp.extension() == ".pkg") {
+#else
                 if (comp.extension() == ".zar") {
+#endif
                     found = true;
                     archive_path = accum;
                 }
@@ -732,8 +737,14 @@ void Emulator::Restart(std::filesystem::path eboot_path,
 
     auto& game_info = Common::ElfInfo::Instance();
     const auto& game_folder = game_info.GetGameFolder();
+#ifdef LIBRETRO
+    const bool from_archive =
+        std::filesystem::is_regular_file(game_folder) &&
+        (game_folder.extension() == ".zar" || game_folder.extension() == ".pkg");
+#else
     const bool from_archive =
         std::filesystem::is_regular_file(game_folder) && game_folder.extension() == ".zar";
+#endif
 
     args.push_back("--log-append");
 

@@ -35,6 +35,26 @@ static std::array<AddContInfo, ORBIS_APP_CONTENT_INFO_LIST_MAX_SIZE> addcont_inf
 
 static s32 sdk_ver = 0;
 static s32 addcont_count = 0;
+
+#ifdef LIBRETRO
+// The additional content of the game: the folders, .zar and .pkg files of its addcont
+// folder, and the PKGs the libretro core found beside the game's PKG.
+static std::vector<std::filesystem::path> LibretroAddcont(const std::filesystem::path& dir) {
+    std::vector<std::filesystem::path> contents;
+    std::error_code ec;
+    if (std::filesystem::is_directory(dir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            const auto extension = entry.path().extension();
+            if (entry.is_directory() || extension == ".zar" || extension == ".pkg") {
+                contents.push_back(entry.path());
+            }
+        }
+    }
+    const auto& beside = Core::FileSys::MntPoints::libretro_addcont;
+    contents.insert(contents.end(), beside.begin(), beside.end());
+    return contents;
+}
+#endif
 static std::string title_id;
 static bool is_initialized = false;
 
@@ -83,11 +103,22 @@ int PS4_SYSV_ABI sceAppContentAddcontMount(u32 service_label,
     }
 
     // Find which directory corresponds to this entitlement
+#ifdef LIBRETRO
+    for (const auto& content : LibretroAddcont(addon_path)) {
+        const std::filesystem::directory_entry entry{content};
+#else
     for (const auto& entry : std::filesystem::directory_iterator(addon_path)) {
         if (!entry.is_directory() && entry.path().extension() != ".zar") {
             continue;
         }
+#endif
 
+#ifdef LIBRETRO
+        // Mount asserts on a content it has no backend for: a PKG that cannot be read.
+        if (!mnt->CreateBackend(entry.path(), true)) {
+            continue;
+        }
+#endif
         // Mount the content so we can check its param.sfo
         mnt->Mount(entry.path(), mount_point->data, true);
 
@@ -315,18 +346,30 @@ int PS4_SYSV_ABI sceAppContentInitialize(const OrbisAppContentInitParam* initPar
         UNREACHABLE_MSG("Failed to get TITLE_ID");
     }
     const auto addon_path = addons_dir / title_id;
+#ifdef LIBRETRO
+    {
+        for (const auto& content : LibretroAddcont(addon_path)) {
+            const std::filesystem::directory_entry entry{content};
+#else
     if (std::filesystem::exists(addon_path)) {
         for (const auto& entry : std::filesystem::directory_iterator(addon_path)) {
             if (!entry.is_directory() && entry.path().extension() != ".zar") {
                 continue;
             }
+#endif
 
             // Create a temporary filesystem backend to view the param.sfo
             auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
             std::shared_ptr<Core::FileSys::IBackend> fs = mnt->CreateBackend(entry.path(), true);
 
             // Look for a param.sfo in the additional content.
+#ifdef LIBRETRO
+            // A PKG that cannot be read (no keys, cut short) has no backend.
+            auto psf_handle =
+                fs ? fs->Open("sce_sys/param.sfo", Common::FS::FileAccessMode::Read) : nullptr;
+#else
             auto psf_handle = fs->Open("sce_sys/param.sfo", Common::FS::FileAccessMode::Read);
+#endif
             if (psf_handle == nullptr) {
                 // This content doesn't have a param.sfo
                 LOG_WARNING(Lib_AppContent, "Additional content {} has no param.sfo",

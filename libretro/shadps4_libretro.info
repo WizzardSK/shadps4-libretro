@@ -1,7 +1,7 @@
 # Software Information
 display_name = "Sony - PlayStation 4 (shadPS4)"
 authors = "shadPS4 Emulator Project"
-supported_extensions = "bin"
+supported_extensions = "bin|pkg"
 corename = "shadPS4"
 categories = "Emulator"
 license = "GPLv2+"

@@ -13,7 +13,7 @@
 namespace Libretro {
 
 inline constexpr std::uint32_t SHARED_MAGIC = 0x34505368; // "hSP4"
-inline constexpr std::uint32_t SHARED_VERSION = 9;
+inline constexpr std::uint32_t SHARED_VERSION = 10;
 
 inline constexpr std::uint32_t MAX_WIDTH = 3840;
 inline constexpr std::uint32_t MAX_HEIGHT = 2160;
@@ -58,6 +58,8 @@ inline constexpr std::uint32_t AUDIO_RING_FRAMES = 16384;
 inline constexpr std::uint32_t AUDIO_RING_TARGET_FRAMES = 1600;
 
 inline constexpr std::size_t PATH_BYTES = 4096;
+/// The paths of a PKG game's additional content, one a line.
+inline constexpr std::size_t ADDCONT_BYTES = 64 * 1024;
 
 /// The frontend's ports that can be pads of the console.
 inline constexpr std::uint32_t MAX_PADS = 4;
@@ -119,6 +121,10 @@ struct SharedState {
     // Written by the core before the emulator is started.
     char eboot_path[PATH_BYTES]; // UTF-8
     char user_dir[PATH_BYTES];   // UTF-8
+    // A game run from its PKG: the PKG of its update and those of its additional content
+    // the core found beside it, or empty.
+    char update_path[PATH_BYTES];        // UTF-8
+    char addcont_paths[ADDCONT_BYTES];   // UTF-8, '\n' after each
     SharedOptions options;
 
     /// Set by the core when content is closed: the emulator ends itself.

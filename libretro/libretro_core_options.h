@@ -217,6 +217,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         "disabled"
     },
     {
+        "shadps4_pkg_content",
+        "PKG Content",
+        NULL,
+        "How a game loaded as a PKG is run. Run from PKG reads its files straight out of the PKG and needs no room on the disk. Install extracts the game, its update and its additional content into the system folder the first time, and runs it from there, which reads faster on a slow drive or machine but takes the room of the whole game.",
+        NULL,
+        "system",
+        {
+            { "run",     "Run from PKG" },
+            { "install", "Install" },
+            { NULL, NULL },
+        },
+        "run"
+    },
+    {
         "shadps4_controllers",
         "Controllers",
         NULL,

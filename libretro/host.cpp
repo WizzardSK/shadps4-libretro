@@ -34,6 +34,7 @@
 #include "common/singleton.h"
 #include "core/devtools/layer.h"
 #include "core/emulator_settings.h"
+#include "core/file_sys/fs.h"
 #include "core/ipc/ipc.h"
 #include "core/libraries/pad/pad.h"
 #include "core/user_manager.h"
@@ -279,6 +280,18 @@ int RunEmulator(const char* argument) {
     const std::filesystem::path user_dir{
         std::u8string_view(reinterpret_cast<const char8_t*>(shared->user_dir))};
     Common::FS::SetLibretroUserDir(user_dir);
+    // The update and additional content of a game run from its PKG (libretro_core.cpp).
+    Core::FileSys::MntPoints::libretro_update =
+        std::u8string_view(reinterpret_cast<const char8_t*>(shared->update_path));
+    for (std::string_view paths{shared->addcont_paths}; !paths.empty();) {
+        const auto end = paths.find('\n');
+        const auto line = paths.substr(0, end);
+        if (!line.empty()) {
+            Core::FileSys::MntPoints::libretro_addcont.emplace_back(
+                std::u8string_view(reinterpret_cast<const char8_t*>(line.data()), line.size()));
+        }
+        paths = end == std::string_view::npos ? std::string_view{} : paths.substr(end + 1);
+    }
 
     std::thread(WatchQuit).detach();
     std::thread(PumpAudio).detach();
