@@ -8,6 +8,13 @@
 #include "core/libraries/fiber/fiber_error.h"
 #include "core/libraries/libs.h"
 #include "core/tls.h"
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+#include <algorithm>
+#include <array>
+#include "common/singleton.h"
+#include "core/guest_cpu/hle_call_adapter.h"
+#include "core/linker.h"
+#endif
 
 namespace Libraries::Fiber {
 
@@ -23,6 +30,7 @@ OrbisFiberContext* GetFiberContext() {
     return Core::GetTcbBase()->tcb_fiber;
 }
 
+#ifndef SHADPS4_ENABLE_FEX_GUEST_CPU
 extern "C" s32 PS4_SYSV_ABI _sceFiberSetJmp(OrbisFiberContext* ctx) asm("_sceFiberSetJmp");
 extern "C" s32 PS4_SYSV_ABI _sceFiberLongJmp(OrbisFiberContext* ctx) asm("_sceFiberLongJmp");
 extern "C" void PS4_SYSV_ABI _sceFiberSwitchEntry(OrbisFiberData* data,
@@ -34,6 +42,7 @@ extern "C" void __attribute__((used)) PS4_SYSV_ABI _sceFiberForceQuit(u64 ret) {
     g_ctx->return_val = ret;
     _sceFiberLongJmp(g_ctx);
 }
+#endif
 
 void PS4_SYSV_ABI _sceFiberCheckStackOverflow(OrbisFiberContext* ctx) {
     u64* stack_base = reinterpret_cast<u64*>(ctx->current_fiber->addr_context);
@@ -78,6 +87,7 @@ s32 PS4_SYSV_ABI _sceFiberAttachContext(OrbisFiber* fiber, void* addr_context, u
     return ORBIS_OK;
 }
 
+#ifndef SHADPS4_ENABLE_FEX_GUEST_CPU
 void PS4_SYSV_ABI _sceFiberSwitchToFiber(OrbisFiber* fiber, u64 arg_on_run_to,
                                          OrbisFiberContext* ctx) {
     OrbisFiberContext* fiber_ctx = fiber->context;
@@ -146,6 +156,7 @@ void PS4_SYSV_ABI _sceFiberTerminate(OrbisFiber* fiber, u64 arg_on_return, Orbis
     _sceFiberLongJmp(ctx);
     __builtin_trap();
 }
+#endif
 
 s32 PS4_SYSV_ABI sceFiberInitializeImpl(OrbisFiber* fiber, const char* name, OrbisFiberEntry entry,
                                         u64 arg_on_initialize, void* addr_context, u64 size_context,
@@ -257,6 +268,7 @@ s32 PS4_SYSV_ABI sceFiberFinalize(OrbisFiber* fiber) {
     return ORBIS_OK;
 }
 
+#ifndef SHADPS4_ENABLE_FEX_GUEST_CPU
 s32 PS4_SYSV_ABI sceFiberRunImpl(OrbisFiber* fiber, void* addr_context, u64 size_context,
                                  u64 arg_on_run_to, u64* arg_on_return) {
     if (!fiber) {
@@ -390,6 +402,7 @@ s32 PS4_SYSV_ABI sceFiberSwitchImpl(OrbisFiber* fiber, void* addr_context, u64 s
 
     return ORBIS_OK;
 }
+#endif
 
 s32 PS4_SYSV_ABI sceFiberGetSelf(OrbisFiber** fiber) {
     if (!fiber) {
@@ -405,6 +418,7 @@ s32 PS4_SYSV_ABI sceFiberGetSelf(OrbisFiber** fiber) {
     return ORBIS_OK;
 }
 
+#ifndef SHADPS4_ENABLE_FEX_GUEST_CPU
 s32 PS4_SYSV_ABI sceFiberReturnToThread(u64 arg_on_return, u64* arg_on_run) {
     OrbisFiberContext* g_ctx = GetFiberContext();
     if (!g_ctx) {
@@ -434,6 +448,240 @@ s32 PS4_SYSV_ABI sceFiberReturnToThread(u64 arg_on_return, u64* arg_on_run) {
     _sceFiberTerminate(cur_fiber, arg_on_return, g_ctx);
     __builtin_trap();
 }
+#endif
+
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+// The game's code runs through FEX, so a fiber switch cannot be a host setjmp/longjmp: the
+// guest's registers of the HLE call that switches (sceFiberRun, sceFiberSwitch,
+// sceFiberReturnToThread) are set aside, and the other context's put in their place; the
+// veneer's ret then continues there. What a context's own call does after its longjmp
+// returns (the previous fiber idle, arg_on_run written) is done when it is resumed.
+namespace {
+
+using Core::GuestCpu::HleCallFrame;
+constexpr std::size_t RegRsp = 4;
+constexpr std::size_t RegRbp = 5;
+constexpr std::size_t RegRsi = 6;
+constexpr std::size_t RegRdi = 7;
+
+// A fiber's call set aside, to be returned from when it is switched to again
+struct SuspendedCall {
+    std::array<u64, 16> gpr;
+    u64* arg_on_run;
+};
+
+// A thread's fibers while sceFiberRun runs them; tcb_fiber points at ctx
+struct ThreadFibers {
+    OrbisFiberContext ctx;
+    std::array<u64, 16> run_call; // the sceFiberRun call, returned from at the end
+    u64* arg_on_return;
+};
+
+void PS4_SYSV_ABI FiberEntryReturned();
+
+// Where a fiber's entry returns to: it must not return
+u64 FiberExitAddress() {
+    static const u64 address = Common::Singleton<Core::Linker>::Instance()->AllocateHleVeneer(
+        Core::GuestCpu::MakeHleCallAdapter(&FiberEntryReturned), "libSceFiber#entry_returned");
+    return address;
+}
+
+// entry(arg_on_initialize, arg_on_run_to) on a stack, as _sceFiberSwitchEntry starts it
+void StartEntry(HleCallFrame& frame, OrbisFiberEntry entry, u64 arg_on_initialize,
+                u64 arg_on_run_to, u64 stack_top, std::atomic<FiberState>* prev_state) {
+    if (prev_state) {
+        *prev_state = FiberState::Idle;
+    }
+    u64 rsp = stack_top & ~u64{15};
+    rsp -= 8;
+    *reinterpret_cast<u64*>(rsp) = FiberExitAddress();
+    rsp -= 8;
+    *reinterpret_cast<u64*>(rsp) = reinterpret_cast<u64>(entry);
+    frame.gpr.fill(0);
+    frame.gpr[RegRsp] = rsp; // the veneer's ret goes to entry, with FiberExitAddress above
+    frame.gpr[RegRdi] = arg_on_initialize;
+    frame.gpr[RegRsi] = arg_on_run_to;
+}
+
+void SuspendCurrent(HleCallFrame& frame, OrbisFiber* fiber, u64* arg_on_run) {
+    auto* call = new SuspendedCall{};
+    std::copy(frame.gpr.begin(), frame.gpr.end(), call->gpr.begin());
+    call->arg_on_run = arg_on_run;
+    fiber->context = reinterpret_cast<OrbisFiberContext*>(call);
+}
+
+// Back into a fiber's set-aside call, which then returns ORBIS_OK
+void ResumeFiber(HleCallFrame& frame, OrbisFiber* fiber, OrbisFiberContext* g_ctx) {
+    auto* call = reinterpret_cast<SuspendedCall*>(fiber->context);
+    fiber->context = nullptr;
+    std::copy(call->gpr.begin(), call->gpr.end(), frame.gpr.begin());
+    if (g_ctx->prev_fiber) {
+        g_ctx->prev_fiber->state = FiberState::Idle;
+        g_ctx->prev_fiber = nullptr;
+    }
+    if (call->arg_on_run) {
+        *call->arg_on_run = g_ctx->arg_on_run_to;
+    }
+    delete call;
+}
+
+// Back into the thread's sceFiberRun call, which then returns ORBIS_OK
+void ResumeThread(HleCallFrame& frame, OrbisFiberContext* g_ctx) {
+    auto* fibers = reinterpret_cast<ThreadFibers*>(g_ctx);
+    std::copy(fibers->run_call.begin(), fibers->run_call.end(), frame.gpr.begin());
+    OrbisFiber* cur_fiber = g_ctx->current_fiber;
+    g_ctx->current_fiber = nullptr;
+    cur_fiber->state = FiberState::Idle;
+    if (g_ctx->return_val != 0) {
+        UNREACHABLE_MSG("Fiber entry function returned.");
+    }
+    if (fibers->arg_on_return) {
+        *fibers->arg_on_return = g_ctx->arg_on_return;
+    }
+    Core::GetTcbBase()->tcb_fiber = nullptr;
+    delete fibers;
+}
+
+void SwitchToFiber(HleCallFrame& frame, OrbisFiber* fiber, u64 arg_on_run_to,
+                   OrbisFiberContext* g_ctx) {
+    if (fiber->context) {
+        g_ctx->arg_on_run_to = arg_on_run_to;
+        ResumeFiber(frame, fiber, g_ctx);
+        return;
+    }
+    std::atomic<FiberState>* prev_state = nullptr;
+    if (g_ctx->prev_fiber) {
+        prev_state = &g_ctx->prev_fiber->state;
+        g_ctx->prev_fiber = nullptr;
+    }
+    StartEntry(frame, fiber->entry, fiber->arg_on_initialize, arg_on_run_to,
+               reinterpret_cast<u64>(fiber->addr_context) + fiber->size_context, prev_state);
+}
+
+void SwitchFiber(HleCallFrame& frame, OrbisFiber* cur_fiber, OrbisFiber* fiber, u64 arg_on_run_to,
+                 OrbisFiberContext* g_ctx) {
+    g_ctx->prev_fiber = cur_fiber;
+    g_ctx->current_fiber = fiber;
+    if (fiber->addr_context == nullptr) {
+        // On the thread's stack, below its sceFiberRun call
+        g_ctx->prev_fiber = nullptr;
+        StartEntry(frame, fiber->entry, fiber->arg_on_initialize, arg_on_run_to, g_ctx->rsp,
+                   &cur_fiber->state);
+        return;
+    }
+    SwitchToFiber(frame, fiber, arg_on_run_to, g_ctx);
+}
+
+void PS4_SYSV_ABI FiberEntryReturned() {
+    HleCallFrame* frame = Core::GuestCpu::CurrentHleCallFrame();
+    OrbisFiberContext* g_ctx = GetFiberContext();
+    ASSERT_MSG(frame && g_ctx, "A fiber entry returned outside a fiber");
+    g_ctx->return_val = 1;
+    ResumeThread(*frame, g_ctx);
+}
+
+} // namespace
+
+s32 PS4_SYSV_ABI sceFiberRunImpl(OrbisFiber* fiber, void* addr_context, u64 size_context,
+                                 u64 arg_on_run_to, u64* arg_on_return) {
+    if (!fiber) {
+        return ORBIS_FIBER_ERROR_NULL;
+    }
+    if ((u64)fiber & 7 || (u64)addr_context & 15) {
+        return ORBIS_FIBER_ERROR_ALIGNMENT;
+    }
+    if (fiber->magic_start != kFiberSignature0 || fiber->magic_end != kFiberSignature1) {
+        return ORBIS_FIBER_ERROR_INVALID;
+    }
+    Core::Tcb* tcb = Core::GetTcbBase();
+    if (tcb->tcb_fiber) {
+        return ORBIS_FIBER_ERROR_PERMISSION;
+    }
+    HleCallFrame* frame = Core::GuestCpu::CurrentHleCallFrame();
+    if (!frame) {
+        return ORBIS_FIBER_ERROR_PERMISSION;
+    }
+    if (addr_context != nullptr || size_context != 0) {
+        s32 res = _sceFiberAttachContext(fiber, addr_context, size_context);
+        if (res < 0) {
+            return res;
+        }
+    }
+    FiberState expected = FiberState::Idle;
+    if (!fiber->state.compare_exchange_strong(expected, FiberState::Run)) {
+        return ORBIS_FIBER_ERROR_STATE;
+    }
+
+    auto* fibers = new ThreadFibers{};
+    fibers->ctx.current_fiber = fiber;
+    fibers->arg_on_return = arg_on_return;
+    std::copy(frame->gpr.begin(), frame->gpr.end(), fibers->run_call.begin());
+    fibers->ctx.rsp = frame->gpr[RegRsp];
+    fibers->ctx.rbp = frame->gpr[RegRbp];
+    tcb->tcb_fiber = &fibers->ctx;
+
+    if (fiber->addr_context) {
+        SwitchToFiber(*frame, fiber, arg_on_run_to, &fibers->ctx);
+    } else {
+        StartEntry(*frame, fiber->entry, fiber->arg_on_initialize, arg_on_run_to,
+                   fibers->ctx.rsp, nullptr);
+    }
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceFiberSwitchImpl(OrbisFiber* fiber, void* addr_context, u64 size_context,
+                                    u64 arg_on_run_to, u64* arg_on_run) {
+    if (!fiber) {
+        return ORBIS_FIBER_ERROR_NULL;
+    }
+    if ((u64)fiber & 7 || (u64)addr_context & 15) {
+        return ORBIS_FIBER_ERROR_ALIGNMENT;
+    }
+    if (fiber->magic_start != kFiberSignature0 || fiber->magic_end != kFiberSignature1) {
+        return ORBIS_FIBER_ERROR_INVALID;
+    }
+    OrbisFiberContext* g_ctx = GetFiberContext();
+    HleCallFrame* frame = Core::GuestCpu::CurrentHleCallFrame();
+    if (!g_ctx || !frame) {
+        return ORBIS_FIBER_ERROR_PERMISSION;
+    }
+    if (addr_context != nullptr || size_context != 0) {
+        s32 res = _sceFiberAttachContext(fiber, addr_context, size_context);
+        if (res < 0) {
+            return res;
+        }
+    }
+    FiberState expected = FiberState::Idle;
+    if (!fiber->state.compare_exchange_strong(expected, FiberState::Run)) {
+        return ORBIS_FIBER_ERROR_STATE;
+    }
+
+    OrbisFiber* cur_fiber = g_ctx->current_fiber;
+    // One on the thread's stack cannot be come back to: its stack is reused
+    if (cur_fiber->addr_context != nullptr) {
+        SuspendCurrent(*frame, cur_fiber, arg_on_run);
+        _sceFiberCheckStackOverflow(g_ctx);
+    }
+    SwitchFiber(*frame, cur_fiber, fiber, arg_on_run_to, g_ctx);
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceFiberReturnToThread(u64 arg_on_return, u64* arg_on_run) {
+    OrbisFiberContext* g_ctx = GetFiberContext();
+    HleCallFrame* frame = Core::GuestCpu::CurrentHleCallFrame();
+    if (!g_ctx || !frame) {
+        return ORBIS_FIBER_ERROR_PERMISSION;
+    }
+    OrbisFiber* cur_fiber = g_ctx->current_fiber;
+    if (cur_fiber->addr_context) {
+        SuspendCurrent(*frame, cur_fiber, arg_on_run);
+        _sceFiberCheckStackOverflow(g_ctx);
+    }
+    g_ctx->arg_on_return = arg_on_return;
+    ResumeThread(*frame, g_ctx);
+    return ORBIS_OK;
+}
+#endif
 
 s32 PS4_SYSV_ABI sceFiberGetInfo(OrbisFiber* fiber, OrbisFiberInfo* fiber_info) {
     if (!fiber || !fiber_info) {

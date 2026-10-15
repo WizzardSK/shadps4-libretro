@@ -3,6 +3,9 @@
 
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/libs.h"
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+#include "core/guest_cpu/guest_callback.h"
+#endif
 
 namespace Libraries::Kernel {
 
@@ -33,7 +36,18 @@ void PS4_SYSV_ABI posix_pthread_cleanup_pop(int execute) {
         PthreadCleanup* old = curthread->cleanup.front();
         curthread->cleanup.pop_front();
         if (execute) {
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+            if (Core::GuestCpu::IsGuestFunctionAddress(
+                    reinterpret_cast<const void*>(old->routine))) {
+                Core::GuestCpu::RunGuestFunctionOrAbort(
+                    reinterpret_cast<void*>(old->routine), "pthread cleanup pop",
+                    old->routine_arg);
+            } else {
+                old->routine(old->routine_arg);
+            }
+#else
             old->routine(old->routine_arg);
+#endif
         }
         if (old->onheap) {
             delete old;

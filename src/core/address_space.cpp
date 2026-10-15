@@ -698,7 +698,12 @@ struct AddressSpace::Impl {
             mmap(reinterpret_cast<void*>(USER_MIN), user_size, protection_flags, map_flags, -1, 0));
 #else
         const auto virtual_size = system_managed_size + system_reserved_size + user_size;
-#if defined(ARCH_X86_64) && !defined(__FreeBSD__)
+#if (defined(ARCH_X86_64) || defined(SHADPS4_ENABLE_FEX_GUEST_CPU)) && !defined(__FreeBSD__)
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+        // The game's x86-64 code through FEX uses its addresses as they are, as on x86-64,
+        // so its memory is where the console has it. Nothing of this process may be there.
+        map_flags = (map_flags & ~MAP_FIXED) | MAP_FIXED_NOREPLACE;
+#endif
         const auto virtual_base =
             reinterpret_cast<u8*>(mmap(reinterpret_cast<void*>(SYSTEM_MANAGED_MIN), virtual_size,
                                        protection_flags, map_flags, -1, 0));

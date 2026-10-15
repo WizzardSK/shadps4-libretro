@@ -4,8 +4,15 @@
 #include <unordered_map>
 #include <boost/container/flat_map.hpp>
 #include <queue>
+#if defined(LIBRETRO) && defined(__aarch64__)
+// x86-64 walkers emitted on an aarch64 host (srt_walker_interpreter.cpp): Xbyak's 64-bit mode
+#define XBYAK64
+#define XBYAK64_GCC
+#endif
 #include <xbyak/xbyak.h>
+#ifdef ARCH_X86_64
 #include <xbyak/xbyak_util.h>
+#endif
 #include "common/arch.h"
 #include "common/decoder.h"
 #include "common/io_file.h"
@@ -23,7 +30,9 @@
 #include "shader_recompiler/ir/srt_gvn_table.h"
 #include "shader_recompiler/ir/value.h"
 
-#ifdef ARCH_X86_64
+// The libretro core on aarch64 emits the same x86-64 walkers, which srt_walker_interpreter.cpp
+// runs there (RunSrtWalker)
+#if defined(ARCH_X86_64) || (defined(LIBRETRO) && defined(__aarch64__) && defined(__linux__))
 
 using namespace Xbyak::util;
 
@@ -641,7 +650,12 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     }
 
     // Register the signal handler for SRT walker, if not already registered
+#ifdef ARCH_X86_64
     if (g_srt_codegen_start == nullptr) {
+#else
+    // The interpreter reads a bad guest pointer as 0 itself; the x86-64 code is not run
+    if (false) {
+#endif
         g_srt_codegen_start = c.getCurr();
         auto* signals = Core::Signals::Instance();
         // Call after the memory invalidation handler

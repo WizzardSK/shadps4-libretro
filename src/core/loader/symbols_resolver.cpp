@@ -8,11 +8,74 @@
 #include "core/aerolib/aerolib.h"
 #include "core/loader/symbols_resolver.h"
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+#include "core/guest_cpu/hle_call_adapter.h"
+#endif
+
 namespace Core::Loader {
 
+SymbolsResolver::SymbolsResolver() = default;
+SymbolsResolver::~SymbolsResolver() = default;
+
 void SymbolsResolver::AddSymbol(const SymbolResolver& s, u64 virtual_addr) {
-    m_symbols.emplace_back(s, virtual_addr);
+    m_symbols.push_back({s, virtual_addr});
 }
+
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+static std::string HleName(const SymbolResolver& s) {
+    return fmt::format("{}#{}#{}", s.name, s.library, s.module);
+}
+
+void SymbolsResolver::AddFunction(const SymbolResolver& s,
+                                  std::shared_ptr<GuestCpu::HleCallAdapter> adapter) {
+    if (adapter == nullptr) {
+        return;
+    }
+    adapter = GetHleCallRegistry().Register(std::move(adapter), HleName(s));
+    if (adapter == nullptr) {
+        return;
+    }
+    for (auto& record : m_symbols) {
+        if (record.symbol == s && record.hle_fallback) {
+            record.hle_adapter = std::move(adapter);
+            record.hle_fallback = false;
+            return;
+        }
+    }
+    SymbolRecord record{s, 0};
+    record.hle_adapter = std::move(adapter);
+    m_symbols.push_back(std::move(record));
+}
+
+const std::shared_ptr<GuestCpu::HleCallAdapter>&
+SymbolsResolver::AddUnsupportedFunction(const SymbolResolver& s) {
+    for (const auto& record : m_symbols) {
+        if (record.symbol == s && record.hle_adapter != nullptr) {
+            return record.hle_adapter;
+        }
+    }
+    AddFunction(s, GuestCpu::MakeUnsupportedHleCallAdapter());
+    ASSERT_MSG(!m_symbols.empty() && m_symbols.back().symbol == s &&
+                   m_symbols.back().hle_adapter != nullptr,
+               "Unable to register unsupported HLE function {}", HleName(s));
+    m_symbols.back().hle_fallback = true;
+    return m_symbols.back().hle_adapter;
+}
+
+std::shared_ptr<GuestCpu::HleCallAdapter> SymbolsResolver::FindFunction(u64 operation) const {
+    if (hle_registry == nullptr) {
+        return {};
+    }
+    return hle_registry->Find(operation);
+}
+
+GuestCpu::HleCallRegistry& SymbolsResolver::GetHleCallRegistry() {
+    if (hle_registry == nullptr) {
+        hle_registry = std::make_unique<GuestCpu::HleCallRegistry>();
+    }
+    return *hle_registry;
+}
+#endif
 
 std::string_view SymbolsResolver::SymbolTypeToS(SymbolType sym_type) {
     switch (sym_type) {

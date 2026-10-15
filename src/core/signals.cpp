@@ -11,6 +11,11 @@
 #include "core/libraries/kernel/threads/exception.h"
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/signals.h"
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+#include "core/fex/fex_guest_engine.h"
+#include "core/libraries/kernel/threads/pthread.h"
+#include "core/libraries/kernel/threads/thread_state.h"
+#endif
 #include "emulator.h"
 
 #ifdef _WIN32
@@ -269,12 +274,32 @@ void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
     switch (sig) {
     case SIGSEGV:
     case SIGBUS: {
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+        // An unaligned atomic in FEX's translated code, which it fixes up itself
+        if (sig == SIGBUS && ::Core::Fex::HandleGuestSignal(sig, info, raw_context)) {
+            return;
+        }
+#endif
         const bool is_write = Common::IsWriteError(raw_context);
         const bool is_exec = Common::IsExecuteError(raw_context);
         if (!signals->DispatchAccessViolation(raw_context, info->si_addr)) {
             if (thread && thread->DispatchSignal(NativeToOrbisSignal(sig), info_p, context_p)) {
                 return;
             }
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+            uint64_t guest_rip = 0;
+            uint64_t guest_rax = 0;
+            if (::Core::Fex::BachataQueryGuestRipSyscall(&guest_rip, &guest_rax)) {
+                LOG_CRITICAL(Debug, "FEX guest state at fault: rip={:#x} rax={:#x}", guest_rip,
+                             guest_rax);
+            }
+            // The game's threads and their stacks, for a fault in a scan of them (a GC)
+            for (const auto* t : Libraries::Kernel::ThrState::Instance()->threads) {
+                const auto base = reinterpret_cast<u64>(t->attr.stackaddr_attr);
+                LOG_CRITICAL(Debug, "thread '{}': stack {:#x}-{:#x}", t->name, base,
+                             base + t->attr.stacksize_attr);
+            }
+#endif
             UNREACHABLE_MSG("Unhandled access violation at code address {}: {} address {}",
                             fmt::ptr(code_address),
                             is_write  ? "Write to"

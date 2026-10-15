@@ -622,7 +622,9 @@ int LauncherDescriptor() {
     return read_only;
 }
 
-#if defined(__aarch64__)
+// With the FEXCore backend the aarch64 emulator runs the game's code itself, in a process of
+// this core's own kind as on x86-64
+#if defined(__aarch64__) && !defined(SHADPS4_ENABLE_FEX_GUEST_CPU)
 #ifdef LIBRETRO_X86_64_PARTS
 // box64 and the x86-64 build of the core, carried in this one (CMakeLists.txt)
 extern "C" const unsigned char g_part_box64[], g_part_box64_end[];

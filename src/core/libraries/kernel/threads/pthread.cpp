@@ -14,6 +14,10 @@
 #endif
 #endif
 #include "core/debug_state.h"
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+#include "core/fex/fex_guest_engine.h"
+#include "core/guest_cpu/guest_callback.h"
+#endif
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/posix_error.h"
@@ -104,13 +108,31 @@ void PS4_SYSV_ABI posix_pthread_exit(void* status) {
     while (!curthread->cleanup.empty()) {
         PthreadCleanup* old = curthread->cleanup.front();
         curthread->cleanup.pop_front();
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+        if (Core::GuestCpu::IsGuestFunctionAddress(reinterpret_cast<const void*>(old->routine))) {
+            Core::GuestCpu::RunGuestFunctionOrAbort(
+                reinterpret_cast<void*>(old->routine), "pthread cleanup", old->routine_arg);
+        } else {
+            old->routine(old->routine_arg);
+        }
+#else
         old->routine(old->routine_arg);
+#endif
         if (old->onheap) {
             delete old;
         }
     }
     if (ThreadDtors) {
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+        if (Core::GuestCpu::IsGuestFunctionAddress(reinterpret_cast<const void*>(ThreadDtors))) {
+            Core::GuestCpu::RunGuestFunctionOrAbort(reinterpret_cast<void*>(ThreadDtors),
+                                                     "pthread thread dtors");
+        } else {
+            (ThreadDtors)();
+        }
+#else
         (ThreadDtors)();
+#endif
     }
     ExitThread();
 }
@@ -274,7 +296,21 @@ static void* RunThread(void* arg) {
     /* Run the current thread's start routine with argument: */
     auto* const stack =
         (void*)(((size_t)curthread->attr.stackaddr_attr + curthread->attr.stacksize_attr) & (~15));
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    void* ret{};
+    if (Core::GuestCpu::IsGuestFunctionAddress(
+            reinterpret_cast<const void*>(curthread->start_routine))) {
+        const std::array<u64, 1> start_arguments{reinterpret_cast<u64>(curthread->arg)};
+        const auto guest_result = Core::GuestCpu::RunGuestFunctionOrAbort(
+            reinterpret_cast<void*>(curthread->start_routine), start_arguments,
+            "pthread start", reinterpret_cast<VAddr>(stack));
+        ret = reinterpret_cast<void*>(guest_result);
+    } else {
+        ret = curthread->start_routine(curthread->arg);
+    }
+#else
     void* ret = _runOnAnotherStack(curthread->arg, (void*)curthread->start_routine, stack);
+#endif
 
     /* Remove thread from tracking */
     DebugState.RemoveCurrentThreadFromGuestList();
@@ -467,7 +503,16 @@ int PS4_SYSV_ABI posix_pthread_once(PthreadOnce* once_control,
 
     PthreadCleanup cup{once_cancel_handler, once_control, 0};
     g_curthread->cleanup.push_front(&cup);
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    if (Core::GuestCpu::IsGuestFunctionAddress(reinterpret_cast<const void*>(init_routine))) {
+        Core::GuestCpu::RunGuestFunctionOrAbort(reinterpret_cast<void*>(init_routine),
+                                                 "pthread once");
+    } else {
+        init_routine();
+    }
+#else
     init_routine();
+#endif
     g_curthread->cleanup.pop_front();
 
     auto state = PthreadOnceState::InProgress;
@@ -1043,6 +1088,25 @@ bool Pthread::DispatchSignal(s32 sig, Siginfo* info, Ucontext* context) {
         PosixActions[sig - 1] = {};
     }
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    // A handler of the game's is guest code: FEX runs it at this thread's next safe point (its
+    // next HLE call or wait), never from here, which may be a host signal handler. One of the
+    // emulator's own (sceCallbackHandler, which queues the game's exception handler) is called.
+    if (Core::GuestCpu::IsGuestFunctionAddress(reinterpret_cast<const void*>(handler))) {
+        if (!Core::Fex::DeliverGuestOrbisSignal(sig, nullptr, nullptr,
+                                                reinterpret_cast<std::uintptr_t>(handler))) {
+            LOG_ERROR(Lib_Kernel, "FEX failed to queue guest signal {}", sig);
+        }
+        // A thread waiting in an HLE call (an event flag, a mutex) reaches no safe point of
+        // its own until the wait ends, which may be what the handler is for (a GC's stop)
+        if (Core::Fex::InGuestHleCall()) {
+            Core::Fex::FlushPendingGuestOrbisSignal();
+        }
+    } else {
+        WrapperArgs arg{this, &action, sig, info, context};
+        CallbackWrapper(&arg);
+    }
+#else
     WrapperArgs arg{this, &action, sig, info, context};
 
     if ((action.sa_flags & POSIX_SA_ONSTACK) && !(sigaltstack.ss_flags & POSIX_SS_DISABLE) &&
@@ -1057,6 +1121,7 @@ bool Pthread::DispatchSignal(s32 sig, Siginfo* info, Ucontext* context) {
     } else {
         CallbackWrapper(&arg);
     }
+#endif
 
     if (context) {
         context->SyncHostFromGuest();

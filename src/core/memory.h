@@ -13,6 +13,9 @@
 #include "common/types.h"
 #include "core/address_space.h"
 #include "core/libraries/kernel/memory.h"
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+#include "core/memory_map_generation.h"
+#endif
 
 namespace Vulkan {
 class Rasterizer;
@@ -277,7 +280,20 @@ public:
 
     s32 UnmapMemory(VAddr virtual_addr, u64 size);
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    // generation: the mapping generation the answer belongs to (FEX's guest memory checks)
+    s32 QueryProtection(VAddr addr, void** start, void** end, u32* prot,
+                        u64* generation = nullptr);
+
+    [[nodiscard]] u64 MappingGeneration() const {
+        return mapping_generation.Load();
+    }
+
+    // Executable guest code made read-only, so FEX can keep what it translated from it
+    s32 SealGuestExecutable(VAddr addr, u64 size);
+#else
     s32 QueryProtection(VAddr addr, void** start, void** end, u32* prot);
+#endif
 
     s32 Protect(VAddr addr, u64 size, MemoryProt prot);
 
@@ -350,6 +366,9 @@ private:
     VMAMap vma_map;
     Common::SharedFirstMutex mutex{};
     std::mutex unmap_mutex{};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    MemoryMapGeneration mapping_generation{};
+#endif
     u64 total_direct_size{};
     u64 total_flexible_size{};
     u64 flexible_usage{};

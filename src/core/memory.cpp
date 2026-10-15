@@ -352,6 +352,9 @@ s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
 
     // Acquire writer lock
     std::scoped_lock lk2{mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    const auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
 
     for (const auto& [addr, size] : remove_list) {
         LOG_INFO(Kernel_Vmm, "Unmapping direct mapping {:#x} with size {:#x}", addr, size);
@@ -376,6 +379,9 @@ s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
 s32 MemoryManager::PoolCommit(VAddr virtual_addr, u64 size, MemoryProt prot, s32 mtype) {
     std::scoped_lock lk{unmap_mutex};
     std::unique_lock lk2{mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
                virtual_addr);
 
@@ -462,6 +468,9 @@ s32 MemoryManager::PoolCommit(VAddr virtual_addr, u64 size, MemoryProt prot, s32
     // Merge this VMA with similar nearby areas
     MergeAdjacent(vma_map, new_vma_handle);
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    mapping_mutation.Finish();
+#endif
     lk2.unlock();
     if (IsValidGpuMapping(mapped_addr, size)) {
         rasterizer->MapMemory(mapped_addr, size);
@@ -587,6 +596,9 @@ s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, Memo
 
     // Acquire writer lock.
     std::unique_lock lk2{mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
 
     // Create VMA representing this mapping.
     auto new_vma_handle = CreateArea(virtual_addr, size, prot, flags, type, name, alignment);
@@ -685,6 +697,9 @@ s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, Memo
             // TRACK_ALLOC(mapped_addr, size, "VMEM");
         }
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+        mapping_mutation.Finish();
+#endif
         lk2.unlock();
 
         // If this is not a reservation, then map to GPU and address space
@@ -776,6 +791,9 @@ s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, Memory
 
     // Aquire writer lock
     std::scoped_lock lk2{mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    const auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
 
     // Update VMA map and map to address space.
     auto new_vma_handle = CreateArea(virtual_addr, size, prot, flags, VMAType::File, "anon", 0);
@@ -844,6 +862,9 @@ s32 MemoryManager::PoolDecommit(VAddr virtual_addr, u64 size) {
 
     // Aquire writer mutex
     std::scoped_lock lk2{mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    const auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
 
     // Loop through all vmas in the area, unmap them.
     u64 remaining_size = size;
@@ -930,6 +951,9 @@ s32 MemoryManager::UnmapMemory(VAddr virtual_addr, u64 size) {
 
     // Acquire writer lock.
     std::scoped_lock lk2{mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    const auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
     return UnmapMemoryImpl(virtual_addr, size);
 }
 
@@ -1019,7 +1043,12 @@ s32 MemoryManager::UnmapMemoryImpl(VAddr virtual_addr, u64 size) {
     return ORBIS_OK;
 }
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+s32 MemoryManager::QueryProtection(VAddr addr, void** start, void** end, u32* prot,
+                                   u64* generation) {
+#else
 s32 MemoryManager::QueryProtection(VAddr addr, void** start, void** end, u32* prot) {
+#endif
     std::shared_lock lk{mutex};
     VAddr min_query_addr = impl.SystemManagedVirtualBase();
     if (addr < min_query_addr) {
@@ -1033,6 +1062,11 @@ s32 MemoryManager::QueryProtection(VAddr addr, void** start, void** end, u32* pr
         LOG_ERROR(Kernel_Vmm, "Address {:#x} is not mapped", addr);
         return ORBIS_KERNEL_ERROR_EACCES;
     }
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    if (generation != nullptr) {
+        *generation = mapping_generation.Load();
+    }
+#endif
 
     if (start != nullptr) {
         *start = reinterpret_cast<void*>(vma.base);
@@ -1113,6 +1147,35 @@ s64 MemoryManager::ProtectBytes(VAddr addr, VirtualMemoryArea& vma_base, u64 siz
     return adjusted_size;
 }
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+s32 MemoryManager::SealGuestExecutable(VAddr addr, u64 size) {
+    if (size == 0) return ORBIS_OK;
+
+    std::scoped_lock lk{mutex, unmap_mutex};
+    if (!IsValidMapping(addr, size) || addr > std::numeric_limits<VAddr>::max() - size) {
+        return ORBIS_KERNEL_ERROR_EACCES;
+    }
+
+    const auto end = addr + size;
+    auto cursor = addr;
+    while (cursor < end) {
+        const auto it = FindVMA(cursor);
+        const auto& vma = it->second;
+        if (vma.base > cursor || vma.IsFree() || vma.type == VMAType::Reserved ||
+            vma.type == VMAType::PoolReserved || False(vma.prot & MemoryProt::CpuExec) ||
+            True(vma.prot & MemoryProt::CpuWrite)) {
+            return ORBIS_KERNEL_ERROR_EACCES;
+        }
+        const auto vma_end = vma.base + vma.size;
+        if (vma_end <= cursor) return ORBIS_KERNEL_ERROR_EACCES;
+        cursor = std::min(end, vma_end);
+    }
+
+    impl.Protect(addr, size, MemoryPermission::Read | MemoryPermission::Execute);
+    return ORBIS_OK;
+}
+#endif
+
 s32 MemoryManager::Protect(VAddr addr, u64 size, MemoryProt prot) {
     // If size is zero, then there's nothing to protect
     if (size == 0) {
@@ -1121,6 +1184,9 @@ s32 MemoryManager::Protect(VAddr addr, u64 size, MemoryProt prot) {
 
     // Ensure the range to modify is valid
     std::scoped_lock lk{mutex, unmap_mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    const auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
 
     const VAddr vbase = impl.SystemManagedVirtualBase();
     const VAddr vend = vbase + impl.SystemManagedVirtualSize();
@@ -1306,6 +1372,9 @@ s32 MemoryManager::DirectQueryAvailable(PAddr search_start, PAddr search_end, u6
 
 s32 MemoryManager::SetDirectMemoryType(VAddr addr, u64 size, s32 memory_type) {
     std::scoped_lock lk{mutex, unmap_mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    const auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
 
     ASSERT_MSG(IsValidMapping(addr, size), "Attempted to access invalid address {:#x}", addr);
 
@@ -1356,6 +1425,9 @@ s32 MemoryManager::SetDirectMemoryType(VAddr addr, u64 size, s32 memory_type) {
 
 void MemoryManager::NameVirtualRange(VAddr virtual_addr, u64 size, std::string_view name) {
     std::scoped_lock lk{mutex, unmap_mutex};
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    const auto mapping_mutation = mapping_generation.BeginMutation();
+#endif
 
     // Sizes are aligned up to the nearest 16_KB
     u64 aligned_size = Common::AlignUp(size, 16_KB);

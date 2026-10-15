@@ -15,9 +15,9 @@ Builds for Windows, Linux (x86_64) and Linux on ARM (aarch64) are on the [Releas
 
 Put the core into RetroArch's `cores` folder and `shadps4_libretro.info` into its `info` folder.
 
-The emulator runs the game's code directly on the host CPU and has no recompiler, so it needs a 64-bit x86 CPU, with AVX2.
+On Windows and on Linux x86_64 the emulator runs the game's code directly on the host CPU and has no recompiler, so it needs a 64-bit x86 CPU, with AVX2.
 
-- **Linux on ARM (aarch64), experimental:** the core for an ARM frontend runs the emulator as an x86-64 process through [box64](https://github.com/ptitSeb/box64), which translates it. The core is one file, `shadps4_libretro.so` in `cores`: it carries box64 and the x86-64 build of the emulator, and writes them into the system directory, under `shadPS4/x86_64/`, at its first start and after an update. The x86-64 build links its C++ runtime in, so box64 needs no x86-64 libraries besides. The box64 is built with its own addresses moved out of the range the emulator maps for the console (`.github/workflows/libretro.yml` has the three changes); a stock box64 does not work. It needs glibc, a GPU with Vulkan 1.3 and a 48-bit address space, and it is slow: the game's code is translated. Not on Android.
+- **Linux on ARM (aarch64), experimental:** `shadps4_libretro.so` for an ARM frontend is the emulator built for ARM, with [FEX](https://github.com/FEX-Emu/FEX)'s CPU core (FEXCore) inside it running the game's x86-64 code; nothing else is needed. The port is the one of [Bachata S4](https://github.com/zenithblue-oss/shadps4-arm64), taken over with fixes for a core that is loaded into a frontend. It needs glibc, a GPU with Vulkan 1.3 and a 48-bit address space. Tried on one machine (Snapdragon 7c, Adreno 618 with Turnip): Sonic Mania plays at full speed and Horizon Chase Turbo at about 22 frames a second, held back by the GPU. Where the emulator's own `libSceAvPlayer` or `libSceFont` would call back into the game, dumped modules are needed on ARM, as those calls are not run through FEX yet. Not on Android. The earlier ARM core, which carried box64 and the x86-64 build of the emulator and translated all of it, can still be built (`box64core` in the CI workflow); it is not in the releases.
 
 ## Video
 
@@ -80,7 +80,7 @@ RetroArch's ports 1 to 4 are the console's controllers, as many as the core opti
 
 ## Core options
 
-- **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, PKG Content, Controllers, Show Splash Screen, Exact CPU Flags (ARM only)
+- **System:** PS4 Pro Mode, Console Language, Devkit Console Mode, Additional Memory, Confirm Button, Connected to Network, PKG Content, Controllers, Show Splash Screen, Exact CPU Flags (only in the box64 build of the ARM core)
 - **Video:** Output Resolution, FSR Upscaling, FSR Sharpening, FSR Sharpening Strength, VBlank Frequency, GPU Readbacks, Direct Memory Access, Readback Linear Images, Copy GPU Buffers, GPU Frame Hand-over, Shader Cache, Show FPS Counter
 - **Audio:** Volume
 - **Trophies:** Trophy Notifications, Trophy Notification Position, Trophy Notification Duration
@@ -112,4 +112,4 @@ The CI workflow `.github/workflows/libretro.yml` builds both platforms. `.gitlab
 
 ## License
 
-GPL-2.0-or-later, as shadPS4. See [LICENSE](LICENSE).
+GPL-2.0-or-later, as shadPS4. See [LICENSE](LICENSE). The ARM core's FEXCore and the code taken from Bachata S4 are under the MIT license.

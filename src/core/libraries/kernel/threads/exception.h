@@ -16,6 +16,11 @@ class SymbolsResolver;
 
 namespace Libraries::Kernel {
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+// The top of the current thread's guest stack, for a guest signal handler FEX runs
+u64 FexCurrentGuestStackTop() noexcept;
+#endif
+
 using OrbisKernelExceptionHandler = PS4_SYSV_ABI void (*)(int, void*);
 struct OrbisKernelExceptionHandlerStack {
     void* ss_sp;

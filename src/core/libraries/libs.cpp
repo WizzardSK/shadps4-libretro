@@ -98,6 +98,20 @@ void LinkSymbolImpl(Core::Loader::SymbolsResolver* sym, char const* nid, char co
     sym->AddSymbol(sr, symbol);
 }
 
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+void LinkFunctionImpl(Core::Loader::SymbolsResolver* sym, char const* nid, char const* lib,
+                      u16 libversion, char const* mod,
+                      std::shared_ptr<Core::GuestCpu::HleCallAdapter> adapter) {
+    Core::Loader::SymbolResolver sr{};
+    sr.name = nid;
+    sr.library = lib;
+    sr.library_version = libversion;
+    sr.module = mod;
+    sr.type = Core::Loader::SymbolType::Function;
+    sym->AddFunction(sr, std::move(adapter));
+}
+#endif
+
 namespace Libraries {
 
 static void RegisterAudio3d(Core::Loader::SymbolsResolver* sym) {
@@ -189,7 +203,7 @@ void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
             {"libSceVideoRecording.sprx", Libraries::VideoRecording::RegisterLib},
             {"libSceInvitationDialog.sprx", Libraries::InvitationDialog::RegisterLib},
             {"libSceNpUtility.sprx", Libraries::Np::NpUtility::RegisterLib},
-#ifdef ARCH_X86_64
+#if defined(ARCH_X86_64) || defined(SHADPS4_ENABLE_FEX_GUEST_CPU)
             {"libSceFiber.sprx", Libraries::Fiber::RegisterLib},
 #endif
             // Loading libSceSsl is locked behind a title workaround that currently applies to

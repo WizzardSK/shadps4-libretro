@@ -410,7 +410,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         },
         "enabled"
     },
-#if defined(__aarch64__)
+#if defined(__aarch64__) && !defined(SHADPS4_ENABLE_FEX_GUEST_CPU)
     {
         // On by default: without it Sonic Mania's music, which the game decodes itself, was
         // silent while its sound effects played. Only the ARM build translates the emulator.

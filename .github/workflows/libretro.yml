@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Platforms to build, comma separated (linux, windows, arm64)"
+        description: "Platforms to build, comma separated (linux, windows, arm64; box64core for the aarch64 core through box64)"
         default: "linux,windows,arm64"
 
 concurrency:
@@ -20,7 +20,7 @@ env:
 jobs:
   linux:
     name: Linux x86_64
-    if: contains(inputs.platforms, 'linux') || contains(inputs.platforms, 'arm64')
+    if: contains(inputs.platforms, 'linux') || contains(inputs.platforms, 'box64core')
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v6
@@ -69,15 +69,16 @@ jobs:
         path: out/
 
     - uses: actions/upload-artifact@v7
-      if: contains(inputs.platforms, 'arm64')
+      if: contains(inputs.platforms, 'box64core')
       with:
         name: x86_64-parts
         path: parts/
 
-  # The aarch64 core, carrying box64 and the x86-64 build of the emulator
+  # The earlier aarch64 core, carrying box64 and the x86-64 build of the emulator, which it
+  # runs through box64; built only when asked for (box64core)
   linux-arm64:
-    name: Linux aarch64
-    if: contains(inputs.platforms, 'arm64')
+    name: Linux aarch64 (box64)
+    if: contains(inputs.platforms, 'box64core')
     needs: [linux, box64]
     runs-on: ubuntu-24.04-arm
     steps:
@@ -126,13 +127,84 @@ jobs:
 
     - uses: actions/upload-artifact@v7
       with:
+        name: shadps4_libretro-linux-aarch64-box64
+        path: out/
+
+  # The aarch64 core with the game's code run through FEXCore in its own process, in
+  # place of box64 (ENABLE_FEX_GUEST_CPU): FEX built and its smoke test run, then the core.
+  linux-arm64-fex:
+    name: Linux aarch64
+    if: contains(inputs.platforms, 'arm64')
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: Add LLVM repository
+      run: |
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt install -y libgles2-mesa-dev clang-19 lld-19 mold ninja-build build-essential libasound2-dev libpulse-dev libopenal-dev libudev-dev
+
+    - name: Cache CMake Build
+      uses: hendrikmuhs/ccache-action@v1.2.21
+      with:
+        append-timestamp: false
+        key: libretro-linux-arm64-fex-${{ hashFiles('**/CMakeLists.txt', 'cmake/**', '.ci/build-fex.sh') }}
+
+    # FEX changes only with its build script, patch or smoke test
+    - name: Cache FEX
+      id: fex-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          fex
+          fex-build
+        key: fex-arm64-${{ hashFiles('.ci/build-fex.sh', '.ci/fex/**') }}
+
+    - name: Build FEX
+      if: steps.fex-cache.outputs.cache-hit != 'true'
+      run: CC=clang-19 CXX=clang++-19 .ci/build-fex.sh ${{github.workspace}}/fex ${{github.workspace}}/fex-build
+
+    - name: FEXCore smoke test
+      run: "$(find ${{github.workspace}}/fex-build -name fexcore-smoke -type f -perm -u+x | head -1)"
+
+    - name: Configure CMake
+      run: cmake --fresh -B ${{github.workspace}}/build -DENABLE_LIBRETRO=ON -DENABLE_DISCORD_RPC=OFF -DENABLE_UPDATER=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_MODULE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_FEX_GUEST_CPU=ON -DFEXCORE_GUEST_CPU_SOURCE_DIR=${{github.workspace}}/fex -DFEXCORE_GUEST_CPU_BUILD_DIR=${{github.workspace}}/fex-build
+
+    # -k: every file that does not compile yet, not just the first
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel $(nproc) -- -k
+
+    - name: Collect
+      run: |
+        mkdir out
+        cp "$(find build -name 'shadps4_libretro.so' | head -1)" out/
+        cp libretro/shadps4_libretro.info out/
+        # With its symbols, for backtraces of crashes on the test machine
+        mkdir symbols && cp out/shadps4_libretro.so symbols/
+        strip --strip-unneeded out/shadps4_libretro.so
+        ls -la out
+        # The frontend loads the core with dlopen: no static TLS
+        ! readelf -dW out/shadps4_libretro.so | grep -q STATIC_TLS
+
+    - uses: actions/upload-artifact@v7
+      with:
         name: shadps4_libretro-linux-aarch64
         path: out/
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: symbols-linux-aarch64
+        path: symbols/
 
   # box64, which the aarch64 core starts the x86-64 emulator's process through.
   box64:
     name: box64 aarch64
-    if: contains(inputs.platforms, 'box64') || contains(inputs.platforms, 'arm64')
+    if: contains(inputs.platforms, 'box64')
     runs-on: ubuntu-24.04-arm
     steps:
     - name: Fetch box64
@@ -226,7 +298,7 @@ jobs:
   release:
     name: Update release
     if: github.ref_name == vars.RELEASE_BRANCH && contains(inputs.platforms, 'linux') && contains(inputs.platforms, 'windows') && contains(inputs.platforms, 'arm64')
-    needs: [linux, linux-arm64, windows]
+    needs: [linux, linux-arm64-fex, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

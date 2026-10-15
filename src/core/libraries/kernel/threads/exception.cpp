@@ -7,6 +7,9 @@
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/posix_error.h"
 #include "core/libraries/kernel/threads/exception.h"
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+#include "core/fex/fex_guest_engine.h"
+#endif
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/libs.h"
 #include "core/signals.h"
@@ -21,6 +24,18 @@
 #include "exception.h"
 
 namespace Libraries::Kernel {
+
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+u64 FexCurrentGuestStackTop() noexcept {
+    auto* thr = g_curthread;
+    if (thr == nullptr || thr->attr.stackaddr_attr == nullptr ||
+        thr->attr.stacksize_attr <= 0x2000) {
+        return 0;
+    }
+    const auto base = reinterpret_cast<u64>(thr->attr.stackaddr_attr);
+    return (base + thr->attr.stacksize_attr) & ~u64{0xf};
+}
+#endif
 
 #ifndef _WIN32
 static thread_local ucontext_t* s_current_host_context = nullptr;
@@ -573,7 +588,18 @@ void PS4_SYSV_ABI sceCallbackHandler(int sig, Siginfo* info, Ucontext* context) 
     if (!cb) {
         UNREACHABLE(); // should be impossible unless race conditions perhaps
     }
+#ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
+    // The game's handler is guest code, run by FEX at the thread's next safe point
+    if (!Core::Fex::DeliverGuestOrbisSignal(sig, nullptr, nullptr,
+                                            reinterpret_cast<std::uintptr_t>(cb))) {
+        LOG_ERROR(Lib_Kernel, "FEX failed to queue the game's handler for signal {}", sig);
+    }
+    if (Core::Fex::InGuestHleCall()) {
+        Core::Fex::FlushPendingGuestOrbisSignal();
+    }
+#else
     cb(sig, context);
+#endif
 }
 
 // libkernel has a check in sceKernelInstallExceptionHandler and sceKernelRemoveExceptionHandler for
