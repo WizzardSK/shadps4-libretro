@@ -21,7 +21,7 @@ On Windows and on Linux x86_64 the emulator runs the game's code directly on the
 
 ## Video
 
-The emulator renders with Vulkan and needs a GPU with Vulkan 1.3. RetroArch's video driver does not matter: the core hands over finished frames, at the size set by the core option Resolution, so it runs under `vulkan`, `glcore`, `gl` or `d3d11` alike.
+The emulator renders with Vulkan and needs a GPU with Vulkan 1.3. A GPU without sparse buffers (Intel Gen9, such as HD Graphics 615) works too, with the GPU's buffers taking more memory. RetroArch's video driver does not matter: the core hands over finished frames, at the size set by the core option Resolution, so it runs under `vulkan`, `glcore`, `gl` or `d3d11` alike.
 
 The frames are copied through system memory on their way to RetroArch, which costs speed at high output resolutions.
 

@@ -345,6 +345,11 @@ public:
     }
 
 #ifdef LIBRETRO
+    /// Whether the device has sparse buffers at all
+    bool IsSparseBindingSupported() const {
+        return features.sparseBinding;
+    }
+
     /// Whether a sparse buffer may be used with parts of it left unbound
     bool IsSparseResidencyBufferSupported() const {
         return features.sparseResidencyBuffer;

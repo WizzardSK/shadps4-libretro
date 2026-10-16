@@ -88,8 +88,18 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     if (!instance.IsSparseResidencyBufferSupported()) {
         sparse_flags = vk::BufferCreateFlagBits::eSparseBinding;
     }
+    // A device without sparse buffers at all (Intel HD 615 under Mesa) has every arena backed
+    // whole, so they are kept as small as with little sparse address space
+    dense_arenas = !instance.IsSparseBindingSupported();
     const u64 sparse_space = instance.SparseAddressSpaceSize();
-    if (sparse_space != 0 && sparse_space < (u64{64} << DEFAULT_ARENA_PAGE_BITS)) {
+    if (dense_arenas) {
+        sparse_flags = {};
+        ARENA_PAGE_BITS = MIN_ARENA_PAGE_BITS;
+        ARENA_PAGE_SIZE = u64{1} << ARENA_PAGE_BITS;
+        NUM_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - ARENA_PAGE_BITS);
+        LOG_WARNING(Render, "The device has no sparse buffers: arenas of {} MiB backed whole",
+                    ARENA_PAGE_SIZE >> 20);
+    } else if (sparse_space != 0 && sparse_space < (u64{64} << DEFAULT_ARENA_PAGE_BITS)) {
         ARENA_PAGE_BITS = std::clamp<u64>(std::bit_width(sparse_space) - 1 - 6, MIN_ARENA_PAGE_BITS,
                                           DEFAULT_ARENA_PAGE_BITS);
         ARENA_PAGE_SIZE = u64{1} << ARENA_PAGE_BITS;
@@ -405,8 +415,21 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 total_size = first_size + last_size;
     const u64 end_block = (first_addr + total_size) >> block_shift;
     auto* new_arena = &arenas.emplace_back(instance, first_addr, total_size, MemoryType::Sparse);
+#ifdef LIBRETRO
+    if (dense_arenas) {
+        MigrateDenseArena(first_arena, new_arena);
+        MigrateDenseArena(last_arena, new_arena);
+    }
+    auto* bind = dense_arenas ? nullptr : BindsForArena(new_arena);
+#else
     auto* bind = BindsForArena(new_arena);
+#endif
     resident_ranges.ForEachInRange(base_block, end_block, [&](const Backing& backing) {
+#ifdef LIBRETRO
+        if (!bind) {
+            return;
+        }
+#endif
         const u64 start = std::max(base_block, backing.start);
         const u64 end = std::min(end_block, backing.end);
         bind->binds.push_back(vk::SparseMemoryBind{
@@ -439,6 +462,19 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     if (bind_ranges.Empty()) {
         return;
     }
+#ifdef LIBRETRO
+    if (dense_arenas) {
+        // The arena's own memory backs it already: the blocks are only marked resident and
+        // given their addresses
+        boost::container::small_vector<Interval, 4> ranges;
+        for (const auto& range : bind_ranges) {
+            resident_ranges.Add(Backing{{range.start, range.end}, vk::DeviceMemory{}, range.start});
+            ranges.push_back({range.start, range.end});
+        }
+        WriteArenaPageTable(arena, ranges);
+        return;
+    }
+#endif
 
     const vk::MemoryAllocateFlagsInfo alloc_flags = {
         .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
@@ -578,6 +614,59 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
     tile_manager.TileImage(image, buffer_copies, arena, arena_offset);
     return true;
 }
+
+#ifdef LIBRETRO
+void BufferCache::MigrateDenseArena(const Buffer* old_arena, const Buffer* new_arena) {
+    if (!old_arena) {
+        return;
+    }
+    // What the old arena holds is copied into the new one, and the page table sends the GPU's
+    // accesses by address there
+    const u64 base_block = old_arena->cpu_addr >> block_shift;
+    const u64 end_block = (old_arena->cpu_addr + old_arena->size_bytes) >> block_shift;
+    boost::container::small_vector<vk::BufferCopy, 8> copies;
+    boost::container::small_vector<Interval, 8> ranges;
+    resident_ranges.ForEachInRange(base_block, end_block, [&](const Backing& backing) {
+        const u64 start = std::max(base_block, backing.start);
+        const u64 end = std::min(end_block, backing.end);
+        const VAddr addr = start << block_shift;
+        copies.push_back(vk::BufferCopy{
+            .srcOffset = old_arena->Offset(addr),
+            .dstOffset = new_arena->Offset(addr),
+            .size = (end - start) << block_shift,
+        });
+        ranges.push_back({start, end});
+    });
+    if (copies.empty()) {
+        return;
+    }
+    runtime.CopyBuffer(old_arena, new_arena, copies);
+    WriteArenaPageTable(new_arena, ranges);
+}
+
+void BufferCache::WriteArenaPageTable(const Buffer* arena, std::span<const Interval> ranges) {
+    u64 num_blocks{};
+    for (const auto& range : ranges) {
+        num_blocks += range.end - range.start;
+    }
+    const auto staging =
+        staging_pool.Request(num_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
+    boost::container::small_vector<vk::BufferCopy, 8> copies;
+    auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
+    u64 offset = staging.offset;
+    for (const auto& range : ranges) {
+        const u64 arena_offset = (range.start << block_shift) - arena->cpu_addr;
+        for (u64 block = 0; block < range.end - range.start; ++block) {
+            *(bda_addrs++) = arena->BufferDeviceAddress() + arena_offset + (block << block_shift);
+        }
+        const u64 copy_size = (range.end - range.start) * sizeof(vk::DeviceAddress);
+        copies.emplace_back(offset, range.start * sizeof(vk::DeviceAddress), copy_size);
+        offset += copy_size;
+    }
+    staging.Flush();
+    runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
+}
+#endif
 
 void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     if (pending_binds.empty()) {

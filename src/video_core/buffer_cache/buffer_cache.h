@@ -4,6 +4,7 @@
 #pragma once
 
 #include <deque>
+#include <span>
 #include <vector>
 #include <boost/container/small_vector.hpp>
 
@@ -195,6 +196,13 @@ private:
     };
     IntervalList<Backing> resident_ranges;
 
+#ifdef LIBRETRO
+    // The device has no sparse buffers: every arena is fully backed by memory of its own,
+    // nothing is bound, and an arena that replaces others takes their contents by a copy
+    bool dense_arenas{};
+    void MigrateDenseArena(const Buffer* old_arena, const Buffer* new_arena);
+    void WriteArenaPageTable(const Buffer* arena, std::span<const Interval> ranges);
+#endif
     u32 arena_memory_type_index{};
     u32 block_size{};
     u32 block_shift{};
