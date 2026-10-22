@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstring>
+#include <functional>
 #include <map>
 #include <system_error>
 
@@ -160,6 +161,41 @@ std::unique_ptr<Core::FileSys::IDirectory> PkgBackend::OpenDir(std::string_view 
         rel.pop_back();
     }
     return std::make_unique<PkgDirectory>(reader, rel, node);
+}
+
+// As the .zar backend does: the times are the PKG's, and the inode is the guest inode of
+// the entry, which stays the same for the life of the process.
+bool PkgBackend::Stat(std::string_view rel_path, Core::FileSys::FileStat& out) {
+    out = {};
+    const auto* node = reader ? reader->Find(rel_path) : nullptr;
+    if (!node) {
+        return false;
+    }
+    const auto info = Common::FS::GetFileInfo(pkg_path);
+    if (!info) {
+        return false;
+    }
+    // The reader's nodes do not move once the PKG is open, so a node's address names it.
+    const auto inode = Core::FileSys::GetGuestInode(Core::FileSys::FileIdentity{
+        .kind = Core::FileSys::FileIdentity::Kind::ArchiveEntry,
+        .host = info->identity,
+        .node = static_cast<u32>(std::hash<const void*>{}(node)),
+    });
+    if (!inode || *inode == 0) {
+        return false;
+    }
+    out = {
+        .size = node->directory ? 0 : node->size,
+        .inode = *inode,
+        .mtime_sec = info->mtime_sec,
+        .mtime_nsec = info->mtime_nsec,
+        .atime_sec = info->atime_sec,
+        .atime_nsec = info->atime_nsec,
+        .ctime_sec = info->ctime_sec,
+        .ctime_nsec = info->ctime_nsec,
+        .is_directory = node->directory,
+    };
+    return true;
 }
 
 std::optional<std::vector<u8>> PkgBackend::ReadFile(std::string_view rel_path) const {

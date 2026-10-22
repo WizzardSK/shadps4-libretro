@@ -78,6 +78,7 @@ public:
     std::unique_ptr<Core::FileSys::IFile> Open(std::string_view rel_path,
                                                Common::FS::FileAccessMode mode) override;
     std::unique_ptr<Core::FileSys::IDirectory> OpenDir(std::string_view rel_path) override;
+    bool Stat(std::string_view rel_path, Core::FileSys::FileStat& out) override;
 
     bool IsReadOnly() const override {
         return true;
