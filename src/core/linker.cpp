@@ -126,7 +126,7 @@ static void ReportGuestHleFailure(void*, const GuestCpu::HleCallFailure& failure
 }
 #endif
 
-static PS4_SYSV_ABI void* RunMainEntry [[noreturn]] (EntryParams* params) {
+static PS4_SYSV_ABI void* RunMainEntry [[noreturn]](EntryParams* params) {
 #ifdef ARCH_X86_64
     // Start shared library modules
     asm volatile("andq $-16, %%rsp\n" // Align to 16 bytes
