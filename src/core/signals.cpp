@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <iterator>
 #include <fmt/format.h>
 #include "common/arch.h"
 #include "common/assert.h"
@@ -252,6 +253,30 @@ static s32 NativeSiCodeToGuest(s32 sig, s32 code) {
     }
 }
 
+// The signals SignalDispatch takes over, and what was installed for them
+// before: put back by RemoveHandlers (the libretro frontend's process outlives
+// the core), and handed a signal on a thread that is not the game's, which is
+// the frontend's or a library's to report, not the emulator's (sco8487)
+static constexpr int s_handled_signals[] = {SIGSEGV, SIGBUS,  SIGILL,  SIGABRT, SIGTRAP,
+                                            SIGSYS,  SIGUSR1, SIGFPE,  SIGSLEEP};
+static struct sigaction s_previous_actions[std::size(s_handled_signals)];
+static bool s_handlers_installed = false;
+
+// The previous action back for this signal, and the signal to it: a fault runs
+// its instruction again under it, a sent signal (abort, raise, kill) is sent
+// again, delivered once this handler returns
+static void PassToPrevious(int sig, siginfo_t* info) {
+    for (size_t i = 0; i < std::size(s_handled_signals); i++) {
+        if (s_handled_signals[i] == sig) {
+            sigaction(sig, &s_previous_actions[i], nullptr);
+            break;
+        }
+    }
+    if (!info || info->si_code <= 0 || sig == SIGTRAP) {
+        raise(sig);
+    }
+}
+
 void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
     using namespace Libraries::Kernel;
     auto* thread = g_curthread;
@@ -286,6 +311,10 @@ void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
             if (thread && thread->DispatchSignal(NativeToOrbisSignal(sig), info_p, context_p)) {
                 return;
             }
+            if (!thread) {
+                PassToPrevious(sig, info);
+                return;
+            }
 #ifdef SHADPS4_ENABLE_FEX_GUEST_CPU
             uint64_t guest_rip = 0;
             uint64_t guest_rax = 0;
@@ -318,6 +347,10 @@ void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
     case SIGABRT:
     case SIGSYS: {
         if (thread && thread->DispatchSignal(NativeToOrbisSignal(sig), info_p, context_p)) {
+            return;
+        }
+        if (!thread) {
+            PassToPrevious(sig, info);
             return;
         }
 
@@ -360,13 +393,12 @@ SignalDispatch::SignalDispatch() {
     action.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&action.sa_mask);
 
-    ASSERT_MSG(
-        sigaction(SIGSEGV, &action, nullptr) == 0 && sigaction(SIGBUS, &action, nullptr) == 0 &&
-            sigaction(SIGILL, &action, nullptr) == 0 && sigaction(SIGABRT, &action, nullptr) == 0 &&
-            sigaction(SIGTRAP, &action, nullptr) == 0 && sigaction(SIGSYS, &action, nullptr) == 0 &&
-            sigaction(SIGUSR1, &action, nullptr) == 0 && sigaction(SIGFPE, &action, nullptr) == 0 &&
-            sigaction(SIGSLEEP, &action, nullptr) == 0,
-        "Failed to register signal handlers.");
+    bool ok = true;
+    for (size_t i = 0; i < std::size(s_handled_signals); i++) {
+        ok = sigaction(s_handled_signals[i], &action, &s_previous_actions[i]) == 0 && ok;
+    }
+    s_handlers_installed = true;
+    ASSERT_MSG(ok, "Failed to register signal handlers.");
 #endif
 }
 
@@ -379,18 +411,18 @@ void SignalDispatch::RemoveHandlers() {
         std::quick_exit(1);
     }
 #else
-    struct sigaction action{};
-    action.sa_handler = SIG_DFL;
-    action.sa_flags = 0;
-    sigemptyset(&action.sa_mask);
-
-    if (!(sigaction(SIGSEGV, &action, nullptr) == 0 && sigaction(SIGBUS, &action, nullptr) == 0 &&
-          sigaction(SIGILL, &action, nullptr) == 0 && sigaction(SIGFPE, &action, nullptr) == 0 &&
-          sigaction(SIGTRAP, &action, nullptr) == 0 && sigaction(SIGSYS, &action, nullptr) == 0 &&
-          sigaction(SIGUSR1, &action, nullptr) == 0 && sigaction(SIGABRT, &action, nullptr) == 0 &&
-          sigaction(SIGSLEEP, &action, nullptr) == 0)) {
+    // the ones there were before, not the default: those are the frontend's,
+    // or the system's crash reporter (Android's tombstone)
+    if (!s_handlers_installed) {
+        return;
+    }
+    s_handlers_installed = false;
+    bool ok = true;
+    for (size_t i = 0; i < std::size(s_handled_signals); i++) {
+        ok = sigaction(s_handled_signals[i], &s_previous_actions[i], nullptr) == 0 && ok;
+    }
+    if (!ok) {
         LOG_CRITICAL(Core, "Failed to remove signal handlers.");
-        std::quick_exit(1);
     }
 #endif
 }
